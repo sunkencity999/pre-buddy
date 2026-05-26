@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pre_buddy"
 version = "0.1.0"
 description = "PRE Buddy server — `pre buddy serve` subcommand (BLE NUS peripheral + pre.* event emitter)."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "TBD" }
 authors = [{ name = "Christopher Bradford" }]

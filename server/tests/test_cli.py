@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import io
 import json
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
 
 from pre_buddy.cli import main
 
@@ -14,6 +15,14 @@ def _run(argv):
     with redirect_stdout(buf):
         rc = main(argv)
     return rc, buf.getvalue()
+
+
+def _run_capture_err(argv):
+    out = io.StringIO()
+    err = io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        rc = main(argv)
+    return rc, out.getvalue(), err.getvalue()
 
 
 def test_version_command():
@@ -133,3 +142,59 @@ def test_simulate_csv_output(tmp_path):
     lines = [line for line in out.splitlines() if line.strip()]
     assert lines[0].startswith("scenario_index,source_event,led")
     assert "pre.system.error" in lines[1]
+
+
+def test_bridge_from_file_maps_and_prints_pre_events(tmp_path: Path):
+    fixture = tmp_path / "pre.jsonl"
+    fixture.write_text(
+        "\n".join([
+            '{"type":"route","tier":"frontier","escalated":true}',
+            '{"type":"bg_agent","event":"running","id":"bg_1"}',
+            '{"type":"memory_saved","memories":[{"name":"x"}]}',
+            '{"type":"token","content":"chatter"}',
+            "{not json",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    rc, out, err = _run_capture_err(["bridge", "--from-file", str(fixture)])
+    assert rc == 0
+
+    # All emitted lines must be valid pre.* events.
+    emitted = [json.loads(line) for line in out.strip().splitlines()]
+    assert len(emitted) == 3
+    assert emitted[0]["event"] == "pre.router.decision"
+    assert emitted[1]["event"] == "pre.bg_agents.change"
+    assert emitted[2]["event"] == "pre.system.memory_write"
+
+    # Summary tallies the unknown + malformed lines. The CLI filters blank
+    # lines before ingest, so the trailing newline in the fixture isn't counted.
+    assert "received=5" in err
+    assert "forwarded=3" in err
+    assert "unmapped=1" in err
+    assert "malformed=1" in err
+
+
+def test_bridge_help_lists_pre_url_flag():
+    import contextlib
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            main(["bridge", "--help"])
+        except SystemExit:
+            pass
+    assert "--pre-url" in out.getvalue()
+    assert "--from-file" in out.getvalue()
+
+
+def test_viewer_help_lists_port_flag():
+    import contextlib
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            main(["viewer", "--help"])
+        except SystemExit:
+            pass
+    text = out.getvalue()
+    assert "--port" in text
+    assert "--no-open" in text

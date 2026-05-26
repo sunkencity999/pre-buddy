@@ -31,6 +31,7 @@ from .events import (
     TrainingProgressData,
     WakeWordData,
 )
+from .bridge import PreBridge
 from .simulate import (
     build_timeline_rows,
     render_rows_csv,
@@ -145,6 +146,58 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bridge(args: argparse.Namespace) -> int:
+    pump = EventPump()
+    bridge = PreBridge(pump=pump, ws_url=args.pre_url)
+
+    if args.from_file:
+        lines = Path(args.from_file).read_text(encoding="utf-8").splitlines()
+        bridge.ingest(line for line in lines if line.strip())
+    else:
+        import asyncio
+
+        try:
+            asyncio.run(bridge.run(max_messages=args.max_messages))
+        except KeyboardInterrupt:
+            pass
+        except RuntimeError as exc:
+            print(f"bridge: {exc}", file=sys.stderr)
+            return 2
+
+    if args.print_events:
+        while True:
+            ev = pump.pop_next()
+            if ev is None:
+                break
+            print(dumps(ev))
+
+    if args.summary:
+        s = bridge.stats
+        print(
+            f"received={s.received} forwarded={s.forwarded} "
+            f"unmapped={s.unmapped} malformed={s.malformed}",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _cmd_viewer(args: argparse.Namespace) -> int:
+    from .viewer import default_viewer_dir, serve
+
+    directory = Path(args.directory).resolve() if args.directory else default_viewer_dir()
+    try:
+        serve(
+            directory=directory,
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_open,
+        )
+    except FileNotFoundError as exc:
+        print(f"viewer: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _cmd_simulate(args: argparse.Namespace) -> int:
     blob = Path(args.playback).read_text(encoding="utf-8")
     events = list(load_many(blob))
@@ -186,6 +239,37 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--print-outbound", action="store_true", default=True, help="print sent JSON lines")
     serve.add_argument("--summary", action="store_true", default=True, help="print sent/received summary")
     serve.set_defaults(func=_cmd_serve)
+
+    bridge = sub.add_parser(
+        "bridge",
+        help="bridge PRE WebSocket events to pre.* protocol events",
+    )
+    bridge.add_argument("--pre-url", default="ws://localhost:7749", help="PRE WebSocket URL")
+    bridge.add_argument(
+        "--from-file",
+        help="read PRE WS lines from a file instead of connecting (offline test mode)",
+    )
+    bridge.add_argument(
+        "--max-messages",
+        type=int,
+        default=None,
+        help="stop after N PRE WS messages have been received (live mode only)",
+    )
+    bridge.add_argument(
+        "--print-events",
+        action="store_true",
+        default=True,
+        help="print mapped pre.* events to stdout as JSON-lines",
+    )
+    bridge.add_argument("--summary", action="store_true", default=True, help="print stats to stderr")
+    bridge.set_defaults(func=_cmd_bridge)
+
+    viewer = sub.add_parser("viewer", help="serve the browser-based scenario viewer")
+    viewer.add_argument("--host", default="127.0.0.1")
+    viewer.add_argument("--port", type=int, default=7750)
+    viewer.add_argument("--directory", help="override the viewer/ directory location")
+    viewer.add_argument("--no-open", action="store_true", help="don't auto-open a browser tab")
+    viewer.set_defaults(func=_cmd_viewer)
 
     simulate = sub.add_parser("simulate", help="simulate robot responses from a playback JSON-lines file")
     simulate.add_argument("--playback", required=True, help="path to JSON-lines input events")

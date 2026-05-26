@@ -1,0 +1,465 @@
+:root {
+  --bg: #0b0f17;
+  --panel: #131927;
+  --panel-2: #1a2238;
+  --text: #e6ecf5;
+  --text-dim: #8794ad;
+  --accent: #4d8cff;
+  --border: #232c44;
+  --led-default: #3b82f6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
+  background:
+    radial-gradient(1100px 600px at 75% -10%, rgba(77, 140, 255, 0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(139, 92, 246, 0.08), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header {
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.header-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.header-meta span {
+  background: var(--panel);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+main {
+  padding: 24px 28px;
+  display: grid;
+  grid-template-columns: minmax(360px, 1.4fr) minmax(280px, 1fr);
+  gap: 22px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+@media (max-width: 880px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.stage {
+  grid-column: 1 / 2;
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 22px;
+  align-items: center;
+}
+
+@media (max-width: 880px) {
+  .stage {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── robot ── */
+
+.robot {
+  position: relative;
+  height: 260px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.robot-head {
+  width: 150px;
+  height: 150px;
+  background: linear-gradient(160deg, #2b3450 0%, #1a2238 100%);
+  border: 1px solid #3a455d;
+  border-radius: 22px;
+  position: relative;
+  transform-origin: 50% 100%;
+  transition: transform 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+  box-shadow:
+    0 12px 22px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.robot-led {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--led-default);
+  box-shadow: 0 0 12px var(--led-default), 0 0 28px var(--led-default);
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.robot-face {
+  position: absolute;
+  inset: 38px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.eye {
+  width: 16px;
+  height: 16px;
+  background: #0b0f17;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.robot-face::before {
+  content: "";
+  display: flex;
+  gap: 18px;
+}
+
+.robot-face .left, .robot-face .right {
+  /* placed via JS as siblings; here we just style them */
+}
+
+.robot-face > .eye + .eye {
+  margin-top: -16px;  /* tuck so flex shows them side by side via wrap below */
+}
+
+/* simpler: use a 2-eye row */
+.robot-face {
+  inset: 44px 22px 0 22px;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.robot-face .mouth {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 4px;
+  background: #0b0f17;
+  border-radius: 2px;
+  opacity: 0.6;
+}
+
+.robot-base {
+  position: absolute;
+  bottom: 0;
+  width: 180px;
+  height: 14px;
+  background: #1a2238;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.robot-shadow {
+  position: absolute;
+  bottom: -6px;
+  width: 170px;
+  height: 16px;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.45), transparent 70%);
+  filter: blur(2px);
+}
+
+/* motion-active glow */
+.robot-head.motion {
+  filter: drop-shadow(0 0 18px var(--led-default));
+}
+
+/* ── readout ── */
+
+.stage-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.readout-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+#rd-event, #rd-note, #rd-head, #rd-duration {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.led-chip {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--led-default);
+  color: #0b0f17;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ── controls ── */
+
+.controls {
+  grid-column: 1 / 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.transport button {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  min-width: 44px;
+}
+
+.transport button:hover {
+  background: #232c44;
+}
+
+.transport button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.speed {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.speed select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+}
+
+#scrubber {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* ── loader ── */
+
+.loader {
+  grid-column: 2 / 3;
+}
+
+@media (max-width: 880px) {
+  .loader, .controls, .log {
+    grid-column: 1 / 2;
+  }
+}
+
+.loader-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.file-pick {
+  flex: 1 1 180px;
+  background: var(--panel-2);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-pick:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.file-pick input {
+  display: none;
+}
+
+.loader button {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+#paste-area {
+  width: 100%;
+  min-height: 140px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font: 12px/1.4 ui-monospace, monospace;
+  margin-top: 6px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 8px 0 0;
+}
+
+.hint code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #c8d4eb;
+}
+
+/* ── log ── */
+
+.log {
+  grid-column: 1 / -1;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.log h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.log ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font: 12px/1.5 ui-monospace, monospace;
+}
+
+.log li {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: grid;
+  grid-template-columns: 30px 220px 70px 90px 110px 1fr;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.log li:hover {
+  background: var(--panel-2);
+}
+
+.log li.active {
+  background: rgba(77, 140, 255, 0.08);
+  border-color: rgba(77, 140, 255, 0.4);
+}
+
+.log .idx {
+  color: var(--text-dim);
+}
+
+.log .ev {
+  color: #c8d4eb;
+}
+
+.log .led {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 8px;
+  color: #0b0f17;
+  font-weight: 600;
+  text-align: center;
+}
+
+.log .motion {
+  color: var(--text-dim);
+}
+
+.log .note {
+  color: var(--text-dim);
+}

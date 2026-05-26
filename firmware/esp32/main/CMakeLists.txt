@@ -12,6 +12,9 @@ idf_component_register(
         "esp32_display.cpp"
         "esp32_ble.cpp"
         "esp32_character_store.cpp"
+        "esp32_mic.cpp"
+        "esp32_speaker.cpp"
+        "esp32_wake_word.cpp"
     INCLUDE_DIRS
         "."
         "${CMAKE_CURRENT_LIST_DIR}/../../core/include"
@@ -20,4 +23,5 @@ idf_component_register(
         driver      # LEDC for servo PWM
         esp_timer
         nvs_flash
+        esp-sr      # Espressif speech-recognition (wake word + AFE)
 )

@@ -30,3 +30,21 @@ events:
     direction: bidirectional
   - name: pre.character.set
     direction: bidirectional
+  - name: pre.audio.wake_word_detected
+    direction: device_to_server
+  - name: pre.audio.input_start
+    direction: device_to_server
+  - name: pre.audio.input_frame
+    direction: device_to_server
+  - name: pre.audio.input_stop
+    direction: device_to_server
+  - name: pre.audio.output_start
+    direction: server_to_device
+  - name: pre.audio.output_frame
+    direction: server_to_device
+  - name: pre.audio.output_stop
+    direction: server_to_device
+  - name: pre.audio.codec
+    direction: server_to_device
+  - name: pre.audio.error
+    direction: bidirectional

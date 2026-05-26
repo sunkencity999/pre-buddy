@@ -16,6 +16,15 @@ EVENT_KIND_NAMES: tuple[str, ...] = (
     "pre.system.proximity",
     "pre.system.error",
     "pre.character.set",
+    "pre.audio.wake_word_detected",
+    "pre.audio.input_start",
+    "pre.audio.input_frame",
+    "pre.audio.input_stop",
+    "pre.audio.output_start",
+    "pre.audio.output_frame",
+    "pre.audio.output_stop",
+    "pre.audio.codec",
+    "pre.audio.error",
 )
 
 EVENT_DIRECTIONS: dict[str, str] = {
@@ -32,4 +41,13 @@ EVENT_DIRECTIONS: dict[str, str] = {
     "pre.system.proximity": "bidirectional",
     "pre.system.error": "bidirectional",
     "pre.character.set": "bidirectional",
+    "pre.audio.wake_word_detected": "device_to_server",
+    "pre.audio.input_start": "device_to_server",
+    "pre.audio.input_frame": "device_to_server",
+    "pre.audio.input_stop": "device_to_server",
+    "pre.audio.output_start": "server_to_device",
+    "pre.audio.output_frame": "server_to_device",
+    "pre.audio.output_stop": "server_to_device",
+    "pre.audio.codec": "server_to_device",
+    "pre.audio.error": "bidirectional",
 }

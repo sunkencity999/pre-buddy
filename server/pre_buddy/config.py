@@ -80,6 +80,13 @@ class Config:
     so the chosen identity survives device power-cycles by being re-sent
     via pre.character.set when the tray connects."""
 
+    wake_word: str = "hey buddy"
+    """Phrase the device listens for. Only ESP-SR's compiled-in set is
+    actually supported on the device today; values outside it silently
+    fall back to "hey buddy" (mirrored by MockWakeWordDetector). The
+    field is persisted regardless so a future firmware build with a
+    custom-trained model picks it up."""
+
     autostart: bool = False
     """User's "launch at login" choice. The actual installation is done
     by autostart.py; this field just records the intent."""

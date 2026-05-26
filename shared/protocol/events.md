@@ -47,6 +47,25 @@ Both sides MUST be updated together when this file changes.
 | `pre.scheduler.upcoming` | server→device | `{ "event_name": string, "minutes_until": int >= 0 }` |
 | `pre.tools.rollup` | server→device | `{ "tool": string, "calls": int >= 0, "success_rate": number [0,1] }` |
 
+### Voice / audio
+
+Audio frames travel as base64 strings inside the standard JSON envelope —
+no separate binary subchannel — so the existing LineFramer + bridge code
+handle everything. Codec defaults to Opus at 16 kHz mono, 32 kbps (≈ 80
+bytes per 20 ms frame, well inside the ATT MTU).
+
+| Event | Direction | Payload |
+|---|---|---|
+| `pre.audio.wake_word_detected` | device→server | `{ "phrase": string, "confidence": number [0,1] }` |
+| `pre.audio.input_start` | device→server | `{ "session_id": string, "sample_rate_hz": int, "codec": "opus"\|"pcm16" }` |
+| `pre.audio.input_frame` | device→server | `{ "session_id": string, "seq": int >= 0, "data": string (base64) }` |
+| `pre.audio.input_stop` | device→server | `{ "session_id": string, "reason": "vad_silence"\|"timeout"\|"manual" }` |
+| `pre.audio.output_start` | server→device | `{ "session_id": string, "sample_rate_hz": int, "codec": "opus"\|"pcm16" }` |
+| `pre.audio.output_frame` | server→device | `{ "session_id": string, "seq": int >= 0, "data": string (base64) }` |
+| `pre.audio.output_stop` | server→device | `{ "session_id": string, "reason": "complete"\|"cancelled" }` |
+| `pre.audio.codec` | server→device | `{ "name": "opus"\|"pcm16", "sample_rate_hz": int, "bitrate_bps": int }` — set on connect, before any frames |
+| `pre.audio.error` | bidirectional | `{ "code": string, "message": string }` — codec init failure, OOM, etc. |
+
 ## 4. Embodiment mapping (firmware core)
 
 Mapping lives in `firmware/core/include/pre_buddy/protocol.h`.

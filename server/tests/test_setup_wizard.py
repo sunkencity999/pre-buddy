@@ -42,7 +42,7 @@ def test_picks_first_scanned_device_when_user_chooses_1(tmp_path: Path) -> None:
     ]
 
     result, log = _run(
-        answers=["1", "", "n"],
+        answers=["1", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: discovered,
     )
@@ -61,7 +61,7 @@ def test_promotes_pre_buddy_candidates_to_top_of_list(tmp_path: Path) -> None:
         DiscoveredDevice(name="PRE-Buddy", address="AA:02"),
     ]
     result, log = _run(
-        answers=["1", "", "n"],
+        answers=["1", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: discovered,
     )
@@ -75,7 +75,7 @@ def test_manual_entry_overrides_scan(tmp_path: Path) -> None:
     discovered = [DiscoveredDevice(name="x", address="AA:01")]
 
     result, log = _run(
-        answers=["m", "FF:EE:DD:CC", "my-bot", "", "n"],
+        answers=["m", "FF:EE:DD:CC", "my-bot", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: discovered,
     )
@@ -87,7 +87,7 @@ def test_skip_keeps_config_device_fields_unset(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="x", address="AA:01")]
     result, _ = _run(
-        answers=["s", "", "n"],
+        answers=["s", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: discovered,
     )
@@ -98,7 +98,7 @@ def test_skip_keeps_config_device_fields_unset(tmp_path: Path) -> None:
 def test_no_devices_found_falls_through_to_manual(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     result, log = _run(
-        answers=["AA:11:22:33", "", "", "n"],
+        answers=["AA:11:22:33", "", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: [],
     )
@@ -115,7 +115,7 @@ def test_bleak_missing_falls_through_to_manual(tmp_path: Path) -> None:
         raise RuntimeError("BLE scan requires the 'bleak' package.")
 
     result, log = _run(
-        answers=["", "", "n"],   # blank address → skip manual entry too
+        answers=["", "", "", "n"],   # blank address → skip manual entry too
         config_path=cfg_path,
         discover=raises,
     )
@@ -127,7 +127,7 @@ def test_invalid_pick_reprompts_until_valid(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
     result, log = _run(
-        answers=["999", "bogus", "1", "", "n"],
+        answers=["999", "bogus", "1", "", "", "n"],
         config_path=cfg_path,
         discover=lambda timeout: discovered,
     )
@@ -143,8 +143,9 @@ def test_autostart_yes_installs_via_overrides(tmp_path: Path) -> None:
     desktop = tmp_path / "fake.desktop"
     overrides = {"override_system": "Linux", "override_linux_path": desktop}
     # No devices found → falls through to manual entry; blank skips it;
-    # then blank for default character; then "y" for autostart.
-    inp = io.StringIO("\n".join(["", "", "y"]) + "\n")
+    # then blank for default character; blank for default wake word;
+    # then "y" for autostart.
+    inp = io.StringIO("\n".join(["", "", "", "y"]) + "\n")
     out = io.StringIO()
     result = setup_wizard.run_setup(
         inp=inp,
@@ -167,7 +168,7 @@ def test_autostart_no_uninstalls_via_overrides(tmp_path: Path) -> None:
     desktop.parent.mkdir(parents=True, exist_ok=True)
     desktop.write_text("stale", encoding="utf-8")
     overrides = {"override_system": "Linux", "override_linux_path": desktop}
-    inp = io.StringIO("\n".join(["", "", "n"]) + "\n")
+    inp = io.StringIO("\n".join(["", "", "", "n"]) + "\n")
     out = io.StringIO()
     setup_wizard.run_setup(
         inp=inp,
@@ -186,7 +187,7 @@ def test_wizard_writes_config_to_disk(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
     _run(
-        answers=["1", "", "n"],
+        answers=["1", "", "", "n"],
         config_path=cfg_path,
         discover=lambda _: discovered,
     )
@@ -195,6 +196,7 @@ def test_wizard_writes_config_to_disk(tmp_path: Path) -> None:
     assert cfg.device_address == "AA:01"
     assert cfg.autostart is False
     assert cfg.character == "sage"  # default kept when user pressed Enter
+    assert cfg.wake_word == "hey buddy"  # default wake word kept
 
 
 def test_wizard_runnable_with_no_scan_function(tmp_path: Path) -> None:
@@ -202,7 +204,7 @@ def test_wizard_runnable_with_no_scan_function(tmp_path: Path) -> None:
     # bleak installed take.
     cfg_path = tmp_path / "config.json"
     overrides = {"override_system": "Linux", "override_linux_path": tmp_path / "x.desktop"}
-    inp = io.StringIO("\n".join(["AA:99", "manual-bot", "", "n"]) + "\n")
+    inp = io.StringIO("\n".join(["AA:99", "manual-bot", "", "", "n"]) + "\n")
     out = io.StringIO()
     result = setup_wizard.run_setup(
         inp=inp,
@@ -221,9 +223,9 @@ def test_wizard_runnable_with_no_scan_function(tmp_path: Path) -> None:
 def test_wizard_pick_character_by_number(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
-    # "1" pick device, "2" pick sprout, "n" autostart off.
+    # "1" pick device, "2" pick sprout, "" default wake word, "n" autostart off.
     result, _ = _run(
-        answers=["1", "2", "n"],
+        answers=["1", "2", "", "n"],
         config_path=cfg_path,
         discover=lambda _: discovered,
     )
@@ -234,7 +236,7 @@ def test_wizard_pick_character_by_name(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
     result, _ = _run(
-        answers=["1", "sentinel", "n"],
+        answers=["1", "sentinel", "", "n"],
         config_path=cfg_path,
         discover=lambda _: discovered,
     )
@@ -247,7 +249,7 @@ def test_wizard_character_blank_keeps_existing_default(tmp_path: Path) -> None:
     config.save(config.Config(character="sprout"), cfg_path)
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
     result, _ = _run(
-        answers=["1", "", "n"],
+        answers=["1", "", "", "n"],
         config_path=cfg_path,
         discover=lambda _: discovered,
     )
@@ -258,9 +260,48 @@ def test_wizard_character_invalid_input_reprompts(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
     result, log = _run(
-        answers=["1", "wizard", "9", "3", "n"],
+        answers=["1", "wizard", "9", "3", "", "n"],
         config_path=cfg_path,
         discover=lambda _: discovered,
     )
     assert result.cfg.character == "sentinel"
     assert "isn't valid" in log
+
+
+# ── wake word ─────────────────────────────────────────────────────────
+
+
+def test_wizard_blank_wake_word_keeps_default(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
+    result, _ = _run(
+        answers=["1", "", "", "n"],     # device, char default, wake default, no autostart
+        config_path=cfg_path,
+        discover=lambda _: discovered,
+    )
+    assert result.cfg.wake_word == "hey buddy"
+
+
+def test_wizard_custom_wake_word_is_lowercased(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
+    result, _ = _run(
+        answers=["1", "", "Hey PRE", "n"],
+        config_path=cfg_path,
+        discover=lambda _: discovered,
+    )
+    assert result.cfg.wake_word == "hey pre"
+
+
+def test_wizard_wake_word_blank_keeps_existing_value(tmp_path: Path) -> None:
+    # Round-trip: an existing config value survives a re-run with the
+    # user just hitting Enter at the wake-word prompt.
+    cfg_path = tmp_path / "config.json"
+    config.save(config.Config(wake_word="howdy bot"), cfg_path)
+    discovered = [DiscoveredDevice(name="pre-buddy", address="AA:01")]
+    result, _ = _run(
+        answers=["1", "", "", "n"],
+        config_path=cfg_path,
+        discover=lambda _: discovered,
+    )
+    assert result.cfg.wake_word == "howdy bot"

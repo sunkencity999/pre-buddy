@@ -6,7 +6,7 @@
 
 namespace pre_buddy {
 
-constexpr std::array<std::string_view, 13> kGeneratedEventKinds = {
+constexpr std::array<std::string_view, 22> kGeneratedEventKinds = {
     "pre.system.wake_word",
     "pre.bg_agents.change",
     "pre.router.decision",
@@ -20,6 +20,15 @@ constexpr std::array<std::string_view, 13> kGeneratedEventKinds = {
     "pre.system.proximity",
     "pre.system.error",
     "pre.character.set",
+    "pre.audio.wake_word_detected",
+    "pre.audio.input_start",
+    "pre.audio.input_frame",
+    "pre.audio.input_stop",
+    "pre.audio.output_start",
+    "pre.audio.output_frame",
+    "pre.audio.output_stop",
+    "pre.audio.codec",
+    "pre.audio.error",
 };
 
 } // namespace pre_buddy

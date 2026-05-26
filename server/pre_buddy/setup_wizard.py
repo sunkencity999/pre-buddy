@@ -127,7 +127,7 @@ def run_setup(
     out.write("===========================\n\n")
 
     # ── step 1: pick the device ───────────────────────────────────────
-    out.write("Step 1/4: Pick your robot\n")
+    out.write("Step 1/5: Pick your robot\n")
     device = _pick_device(
         inp=inp, out=out, discover=discover, scan_timeout_s=scan_timeout_s
     )
@@ -139,12 +139,17 @@ def run_setup(
         out.write("  (no device selected — you can re-run setup later)\n\n")
 
     # ── step 2: character identity ────────────────────────────────────
-    out.write("Step 2/4: Pick a character\n")
+    out.write("Step 2/5: Pick a character\n")
     cfg.character = _pick_character(inp, out, default=cfg.character or "sage")
     out.write(f"  ✓ Character: {cfg.character}\n\n")
 
-    # ── step 3: autostart ─────────────────────────────────────────────
-    out.write("Step 3/4: Launch at login?\n")
+    # ── step 3: wake word ─────────────────────────────────────────────
+    out.write("Step 3/5: Wake word\n")
+    cfg.wake_word = _pick_wake_word(inp, out, default=cfg.wake_word or "hey buddy")
+    out.write(f"  ✓ Wake word: {cfg.wake_word!r}\n\n")
+
+    # ── step 4: autostart ─────────────────────────────────────────────
+    out.write("Step 4/5: Launch at login?\n")
     cfg.autostart = _prompt_yes_no(
         inp,
         out,
@@ -164,8 +169,8 @@ def run_setup(
         result = autostart.uninstall(**overrides)
         out.write(f"  (skipped — {result.note})\n")
 
-    # ── step 4: save ──────────────────────────────────────────────────
-    out.write("\nStep 4/4: Save configuration\n")
+    # ── step 5: save ──────────────────────────────────────────────────
+    out.write("\nStep 5/5: Save configuration\n")
     written = config.save(cfg, target)
     out.write(f"  ✓ Wrote {written}\n\n")
 
@@ -269,6 +274,21 @@ def _pick_character(inp: TextIO, out: TextIO, *, default: str) -> str:
             if 1 <= idx <= len(VALID_CHARACTERS):
                 return VALID_CHARACTERS[idx - 1]
         out.write(f"  '{raw}' isn't valid — pick a number or one of {VALID_CHARACTERS}.\n")
+
+
+def _pick_wake_word(inp: TextIO, out: TextIO, *, default: str) -> str:
+    out.write(
+        "  The robot wakes up when it hears this phrase.\n"
+        "  Default is 'hey buddy' — the only one ESP-SR ships out of the\n"
+        "  box. Custom phrases need a fine-tuned model, but the choice\n"
+        "  is recorded so a future firmware build can pick it up.\n"
+    )
+    out.write(f"  Wake word (default '{default}'): ")
+    out.flush()
+    raw = inp.readline().strip()
+    if not raw:
+        return default
+    return raw.lower()
 
 
 def _prompt_yes_no(inp: TextIO, out: TextIO, message: str, *, default_yes: bool) -> bool:

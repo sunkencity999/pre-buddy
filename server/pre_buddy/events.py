@@ -54,6 +54,16 @@ class EventKind(str, Enum):
     PROXIMITY = "pre.system.proximity"
     ERROR = "pre.system.error"
     CHARACTER_SET = "pre.character.set"
+    # Voice / audio (see shared/protocol/events.md §Voice).
+    AUDIO_WAKE_WORD_DETECTED = "pre.audio.wake_word_detected"
+    AUDIO_INPUT_START = "pre.audio.input_start"
+    AUDIO_INPUT_FRAME = "pre.audio.input_frame"
+    AUDIO_INPUT_STOP = "pre.audio.input_stop"
+    AUDIO_OUTPUT_START = "pre.audio.output_start"
+    AUDIO_OUTPUT_FRAME = "pre.audio.output_frame"
+    AUDIO_OUTPUT_STOP = "pre.audio.output_stop"
+    AUDIO_CODEC = "pre.audio.codec"
+    AUDIO_ERROR = "pre.audio.error"
 
 
 # --- payload dataclasses ----------------------------------------------------
@@ -193,6 +203,124 @@ class CharacterSetData:
             self.character = Character(self.character)
 
 
+# --- voice / audio payloads ------------------------------------------------
+
+_VALID_CODECS: frozenset[str] = frozenset({"opus", "pcm16"})
+
+
+@dataclass
+class AudioWakeWordDetectedData:
+    phrase: str
+    confidence: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.phrase:
+            raise ValueError("phrase must be non-empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be in [0,1]")
+
+
+@dataclass
+class AudioInputStartData:
+    session_id: str
+    sample_rate_hz: int = 16000
+    codec: str = "opus"
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.sample_rate_hz <= 0:
+            raise ValueError("sample_rate_hz must be positive")
+        if self.codec not in _VALID_CODECS:
+            raise ValueError(f"unknown codec: {self.codec!r}")
+
+
+@dataclass
+class AudioInputFrameData:
+    session_id: str
+    seq: int
+    data: str  # base64-encoded codec payload
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.seq < 0:
+            raise ValueError("seq must be >= 0")
+
+
+@dataclass
+class AudioInputStopData:
+    session_id: str
+    reason: str = "vad_silence"  # vad_silence | timeout | manual
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.reason not in {"vad_silence", "timeout", "manual"}:
+            raise ValueError(f"invalid input-stop reason: {self.reason!r}")
+
+
+@dataclass
+class AudioOutputStartData:
+    session_id: str
+    sample_rate_hz: int = 16000
+    codec: str = "opus"
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.codec not in _VALID_CODECS:
+            raise ValueError(f"unknown codec: {self.codec!r}")
+
+
+@dataclass
+class AudioOutputFrameData:
+    session_id: str
+    seq: int
+    data: str  # base64-encoded codec payload
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.seq < 0:
+            raise ValueError("seq must be >= 0")
+
+
+@dataclass
+class AudioOutputStopData:
+    session_id: str
+    reason: str = "complete"  # complete | cancelled
+
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            raise ValueError("session_id must be non-empty")
+        if self.reason not in {"complete", "cancelled"}:
+            raise ValueError(f"invalid output-stop reason: {self.reason!r}")
+
+
+@dataclass
+class AudioCodecData:
+    name: str = "opus"
+    sample_rate_hz: int = 16000
+    bitrate_bps: int = 32000
+
+    def __post_init__(self) -> None:
+        if self.name not in _VALID_CODECS:
+            raise ValueError(f"unknown codec: {self.name!r}")
+        if self.sample_rate_hz <= 0 or self.bitrate_bps <= 0:
+            raise ValueError("sample_rate_hz and bitrate_bps must be positive")
+
+
+@dataclass
+class AudioErrorData:
+    code: str
+    message: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.code:
+            raise ValueError("code must be non-empty")
+
+
 # --- envelope ---------------------------------------------------------------
 
 @dataclass
@@ -248,6 +376,15 @@ _HYDRATORS: dict[EventKind, type] = {
     EventKind.PROXIMITY: ProximityData,
     EventKind.ERROR: ErrorData,
     EventKind.CHARACTER_SET: CharacterSetData,
+    EventKind.AUDIO_WAKE_WORD_DETECTED: AudioWakeWordDetectedData,
+    EventKind.AUDIO_INPUT_START: AudioInputStartData,
+    EventKind.AUDIO_INPUT_FRAME: AudioInputFrameData,
+    EventKind.AUDIO_INPUT_STOP: AudioInputStopData,
+    EventKind.AUDIO_OUTPUT_START: AudioOutputStartData,
+    EventKind.AUDIO_OUTPUT_FRAME: AudioOutputFrameData,
+    EventKind.AUDIO_OUTPUT_STOP: AudioOutputStopData,
+    EventKind.AUDIO_CODEC: AudioCodecData,
+    EventKind.AUDIO_ERROR: AudioErrorData,
 }
 
 

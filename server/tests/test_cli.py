@@ -89,3 +89,25 @@ def test_serve_demo_prints_event_lines_and_summary():
     assert len(lines) == 6
     assert lines[-1].startswith("sent=")
     assert any('"event":"pre.system.wake_word"' in line for line in lines)
+
+
+def test_simulate_replays_scenario_and_prints_summary(tmp_path):
+    playback = tmp_path / "scenario.jsonl"
+    playback.write_text(
+        "\n".join(
+            [
+                '{"event":"pre.system.wake_word","data":{"source_mic":"left"}}',
+                '{"event":"pre.system.error","data":{"code":"E1","message":"boom"}}',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc, out = _run(["simulate", "--playback", str(playback), "--character", "sprout"])
+    assert rc == 0
+    lines = [line for line in out.splitlines() if line.strip()]
+    assert lines[0].startswith("[01] pre.system.wake_word")
+    assert "led=yellow" in lines[0]
+    assert "led=red" in lines[1]
+    assert lines[-1] == "simulated=2 character=sprout"

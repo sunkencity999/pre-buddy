@@ -1,0 +1,6 @@
+{"event":"pre.system.wake_word","data":{"source_mic":"left"}}
+{"event":"pre.bg_agents.change","data":{"agent_id":"librarian-1","state":"running","tier":"fast"}}
+{"event":"pre.router.decision","data":{"from_tier":"fast","to_tier":"frontier","reason":"complexity"}}
+{"event":"pre.kg.delta","data":{"entities_added":3,"relations_added":7}}
+{"event":"pre.tools.rollup","data":{"tool":"web_search","calls":12,"success_rate":0.92}}
+{"event":"pre.system.proximity","data":{"distance_cm":38.5}}

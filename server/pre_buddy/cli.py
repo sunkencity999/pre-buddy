@@ -7,6 +7,7 @@ standalone tool for rapid local iteration.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ from .events import (
     TrainingProgressData,
     WakeWordData,
 )
+from .mock_robot import simulate_event
 from .pump import EventPump, demo_events
 from .serve import BuddyServer
 from .serializer import dumps, load_many
@@ -139,6 +141,44 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_simulate(args: argparse.Namespace) -> int:
+    blob = Path(args.playback).read_text(encoding="utf-8")
+    events = list(load_many(blob))
+    selected_character = CharacterSetData(character=args.character).character
+
+    for idx, ev in enumerate(events, start=1):
+        response = simulate_event(ev, selected_character)
+        if args.format == "json":
+            print(
+                json.dumps(
+                    {
+                        "scenario_index": idx,
+                        "source_event": response.event,
+                        "led": response.led,
+                        "has_motion": response.has_motion,
+                        "head_x_deg": response.head_x_deg,
+                        "head_y_deg": response.head_y_deg,
+                        "duration_ms": response.duration_ms,
+                        "note": response.note,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            motion = (
+                f"x={response.head_x_deg:.1f} y={response.head_y_deg:.1f} dur={response.duration_ms}ms"
+                if response.has_motion
+                else "still"
+            )
+            print(
+                f"[{idx:02d}] {response.event} -> led={response.led} motion={motion} note={response.note}"
+            )
+
+    print(f"simulated={len(events)} character={selected_character.value}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pre-buddy",
@@ -155,6 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--print-outbound", action="store_true", default=True, help="print sent JSON lines")
     serve.add_argument("--summary", action="store_true", default=True, help="print sent/received summary")
     serve.set_defaults(func=_cmd_serve)
+
+    simulate = sub.add_parser("simulate", help="simulate robot responses from a playback JSON-lines file")
+    simulate.add_argument("--playback", required=True, help="path to JSON-lines input events")
+    simulate.add_argument("--character", default="sage", choices=["sage", "sprout", "sentinel"])
+    simulate.add_argument("--format", default="text", choices=["text", "json"])
+    simulate.set_defaults(func=_cmd_simulate)
 
     emit = sub.add_parser("emit", help="emit a sample event as JSON-line")
     emit.add_argument("kind", choices=[k.value for k in EventKind], help="event kind to emit")

@@ -1,0 +1,4 @@
+{"event":"pre.confidence.warning","data":{"domain":"payments","confidence":0.42,"threshold":0.6}}
+{"event":"pre.scheduler.upcoming","data":{"event_name":"incident review","minutes_until":25}}
+{"event":"pre.system.error","data":{"code":"E_PIPELINE","message":"training job failed"}}
+{"event":"pre.system.memory_write","data":{"key":"incident:2026-05-25","source":"ops"}}

@@ -60,3 +60,32 @@ def test_emit_character_set():
     assert rc == 0
     obj = json.loads(out.strip())
     assert obj["data"] == {"character": "sentinel"}
+
+
+def test_emit_router_decision():
+    rc, out = _run(
+        [
+            "emit",
+            "pre.router.decision",
+            "--from-tier",
+            "fast",
+            "--to-tier",
+            "frontier",
+            "--reason",
+            "complexity",
+        ]
+    )
+    assert rc == 0
+    obj = json.loads(out.strip())
+    assert obj["event"] == "pre.router.decision"
+    assert obj["data"]["to_tier"] == "frontier"
+
+
+def test_serve_demo_prints_event_lines_and_summary():
+    rc, out = _run(["serve", "--demo"])
+    assert rc == 0
+    lines = [line for line in out.splitlines() if line.strip()]
+    # 5 demo events + 1 summary line
+    assert len(lines) == 6
+    assert lines[-1].startswith("sent=")
+    assert any('"event":"pre.system.wake_word"' in line for line in lines)

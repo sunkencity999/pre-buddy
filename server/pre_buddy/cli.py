@@ -1,8 +1,7 @@
-"""Standalone CLI skeleton for development.
+"""Standalone CLI for PRE Buddy server development.
 
-In production this is mounted under the main ``pre`` CLI as ``pre buddy serve``;
-during pre-hardware development we expose a small standalone command for
-emitting and inspecting events.
+Production target is `pre buddy serve`; this package keeps an equivalent
+standalone tool for rapid local iteration.
 """
 
 from __future__ import annotations
@@ -10,19 +9,32 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__
 from .events import (
     BgAgentChangeData,
     CharacterSetData,
+    ConfidenceSnapshotData,
     ConfidenceWarningData,
     ErrorData,
     Event,
     EventKind,
+    KgDeltaData,
+    MemoryWriteData,
+    ProximityData,
+    RouterDecisionData,
+    SchedulerUpcomingData,
+    Tier,
+    ToolsRollupData,
+    TrainingProgressData,
     WakeWordData,
 )
-from .serializer import dumps
+from .pump import EventPump, demo_events
+from .serve import BuddyServer
+from .serializer import dumps, load_many
+from .transport import MockBleSession
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:
@@ -30,84 +42,150 @@ def _cmd_version(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_emit(args: argparse.Namespace) -> int:
-    """Emit a single sample event of the requested kind to stdout."""
-    ts = time.time() if args.timestamp else None
+def _build_event_from_args(args: argparse.Namespace, ts: float | None) -> Event:
     kind = EventKind(args.kind)
 
     if kind is EventKind.WAKE_WORD:
-        ev = Event(kind, WakeWordData(source_mic=args.mic), ts=ts)
-    elif kind is EventKind.BG_AGENT_CHANGE:
-        ev = Event(
+        return Event(kind, WakeWordData(source_mic=args.mic), ts=ts)
+    if kind is EventKind.BG_AGENT_CHANGE:
+        return Event(
             kind,
             BgAgentChangeData(agent_id=args.agent_id, state=args.state, tier=args.tier),
             ts=ts,
         )
-    elif kind is EventKind.CONFIDENCE_WARNING:
-        ev = Event(
+    if kind is EventKind.ROUTER_DECISION:
+        return Event(
+            kind,
+            RouterDecisionData(from_tier=args.from_tier, to_tier=args.to_tier, reason=args.reason),
+            ts=ts,
+        )
+    if kind is EventKind.CONFIDENCE_WARNING:
+        return Event(
             kind,
             ConfidenceWarningData(
                 domain=args.domain, confidence=args.confidence, threshold=args.threshold
             ),
             ts=ts,
         )
-    elif kind is EventKind.ERROR:
-        ev = Event(kind, ErrorData(code=args.code, message=args.message), ts=ts)
-    elif kind is EventKind.CHARACTER_SET:
-        ev = Event(kind, CharacterSetData(character=args.character), ts=ts)
-    else:  # pragma: no cover - argparse choices guards this
-        print(f"unknown event kind: {args.kind}", file=sys.stderr)
-        return 2
+    if kind is EventKind.CONFIDENCE_SNAPSHOT:
+        return Event(
+            kind,
+            ConfidenceSnapshotData(weakest_domain=args.domain, confidence=args.confidence),
+            ts=ts,
+        )
+    if kind is EventKind.KG_DELTA:
+        return Event(
+            kind,
+            KgDeltaData(entities_added=args.entities_added, relations_added=args.relations_added),
+            ts=ts,
+        )
+    if kind is EventKind.TRAINING_PROGRESS:
+        return Event(
+            kind,
+            TrainingProgressData(examples_total=args.examples_total, goal_examples=args.goal_examples),
+            ts=ts,
+        )
+    if kind is EventKind.SCHEDULER_UPCOMING:
+        return Event(
+            kind,
+            SchedulerUpcomingData(event_name=args.event_name, minutes_until=args.minutes_until),
+            ts=ts,
+        )
+    if kind is EventKind.TOOLS_ROLLUP:
+        return Event(
+            kind,
+            ToolsRollupData(tool=args.tool, calls=args.calls, success_rate=args.success_rate),
+            ts=ts,
+        )
+    if kind is EventKind.MEMORY_WRITE:
+        return Event(kind, MemoryWriteData(key=args.key, source=args.source), ts=ts)
+    if kind is EventKind.PROXIMITY:
+        return Event(kind, ProximityData(distance_cm=args.distance_cm), ts=ts)
+    if kind is EventKind.ERROR:
+        return Event(kind, ErrorData(code=args.code, message=args.message), ts=ts)
+    if kind is EventKind.CHARACTER_SET:
+        return Event(kind, CharacterSetData(character=args.character), ts=ts)
 
-    print(dumps(ev))
+    raise ValueError(f"unsupported event kind: {args.kind}")
+
+
+def _cmd_emit(args: argparse.Namespace) -> int:
+    ts = time.time() if args.timestamp else None
+    event = _build_event_from_args(args, ts)
+    print(dumps(event))
     return 0
 
 
-def _cmd_serve(_args: argparse.Namespace) -> int:
-    """Placeholder until BLE NUS peripheral lands (DESIGN.md S0)."""
-    print(
-        "pre-buddy serve: BLE NUS peripheral not yet implemented "
-        "(see DESIGN.md S0). This is a scaffold.",
-        file=sys.stderr,
-    )
+def _cmd_serve(args: argparse.Namespace) -> int:
+    pump = EventPump()
+
+    if args.playback:
+        blob = Path(args.playback).read_text(encoding="utf-8")
+        pump.enqueue_many(load_many(blob))
+    elif args.demo:
+        pump.enqueue_many(demo_events())
+
+    transport = MockBleSession()
+    server = BuddyServer(transport=transport, pump=pump)
+    sent = server.run(max_steps=args.max_steps)
+
+    if args.print_outbound:
+        for line in transport.sent_lines:
+            print(line)
+
+    if args.summary:
+        print(f"sent={sent} received={len(server.received_events)}")
+
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pre-buddy",
-        description="PRE Buddy server (scaffold). See DESIGN.md for the full plan.",
+        description="PRE Buddy server development CLI.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("version", help="print version").set_defaults(func=_cmd_version)
-    sub.add_parser("serve", help="(stub) run the BLE NUS peripheral").set_defaults(
-        func=_cmd_serve
-    )
+
+    serve = sub.add_parser("serve", help="run mock BLE session + event pump")
+    serve.add_argument("--playback", help="path to JSON-lines file to send")
+    serve.add_argument("--demo", action="store_true", help="enqueue built-in demo event sequence")
+    serve.add_argument("--max-steps", type=int, default=None, help="optional server loop step limit")
+    serve.add_argument("--print-outbound", action="store_true", default=True, help="print sent JSON lines")
+    serve.add_argument("--summary", action="store_true", default=True, help="print sent/received summary")
+    serve.set_defaults(func=_cmd_serve)
 
     emit = sub.add_parser("emit", help="emit a sample event as JSON-line")
-    emit.add_argument(
-        "kind",
-        choices=[k.value for k in EventKind],
-        help="event kind to emit",
-    )
+    emit.add_argument("kind", choices=[k.value for k in EventKind], help="event kind to emit")
     emit.add_argument("--timestamp", action="store_true", help="include ts field")
+
+    # Common knobs (only used by relevant event kind)
     emit.add_argument("--mic", default="unknown", choices=["left", "right", "unknown"])
     emit.add_argument("--agent-id", default="demo-agent")
-    emit.add_argument(
-        "--state", default="started", choices=["started", "running", "finished", "failed"]
-    )
-    emit.add_argument(
-        "--tier", default="fast", choices=["fast", "standard", "frontier"]
-    )
+    emit.add_argument("--state", default="started", choices=["started", "running", "finished", "failed"])
+    emit.add_argument("--tier", default=Tier.FAST.value, choices=[t.value for t in Tier])
+    emit.add_argument("--from-tier", default=Tier.FAST.value, choices=[t.value for t in Tier])
+    emit.add_argument("--to-tier", default=Tier.STANDARD.value, choices=[t.value for t in Tier])
+    emit.add_argument("--reason", default="demo")
     emit.add_argument("--domain", default="general")
     emit.add_argument("--confidence", type=float, default=0.3)
     emit.add_argument("--threshold", type=float, default=0.6)
+    emit.add_argument("--entities-added", type=int, default=1)
+    emit.add_argument("--relations-added", type=int, default=1)
+    emit.add_argument("--examples-total", type=int, default=10)
+    emit.add_argument("--goal-examples", type=int, default=100)
+    emit.add_argument("--event-name", default="demo-event")
+    emit.add_argument("--minutes-until", type=int, default=60)
+    emit.add_argument("--tool", default="web_search")
+    emit.add_argument("--calls", type=int, default=1)
+    emit.add_argument("--success-rate", type=float, default=1.0)
+    emit.add_argument("--key", default="note:demo")
+    emit.add_argument("--source", default="demo")
+    emit.add_argument("--distance-cm", type=float, default=35.0)
     emit.add_argument("--code", default="E_DEMO")
     emit.add_argument("--message", default="demo error")
-    emit.add_argument(
-        "--character", default="sage", choices=["sage", "sprout", "sentinel"]
-    )
+    emit.add_argument("--character", default="sage", choices=["sage", "sprout", "sentinel"])
     emit.set_defaults(func=_cmd_emit)
 
     return p

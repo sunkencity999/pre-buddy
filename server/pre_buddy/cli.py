@@ -132,7 +132,24 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     elif args.demo:
         pump.enqueue_many(demo_events())
 
-    transport = MockBleSession()
+    if args.transport == "ble":
+        if not args.device_address and not args.device_name:
+            print("serve --transport ble requires --device-address or --device-name", file=sys.stderr)
+            return 2
+        try:
+            from .transport_ble import BleakNusBackend, BleNusTransport
+        except ImportError as exc:
+            print(f"serve --transport ble: {exc}", file=sys.stderr)
+            return 2
+        try:
+            backend = BleakNusBackend(address=args.device_address, name=args.device_name)
+        except RuntimeError as exc:
+            print(f"serve --transport ble: {exc}", file=sys.stderr)
+            return 2
+        transport = BleNusTransport(backend, connect_timeout_s=args.connect_timeout)
+    else:
+        transport = MockBleSession()
+
     server = BuddyServer(transport=transport, pump=pump)
     sent = server.run(max_steps=args.max_steps)
 
@@ -232,7 +249,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("version", help="print version").set_defaults(func=_cmd_version)
 
-    serve = sub.add_parser("serve", help="run mock BLE session + event pump")
+    serve = sub.add_parser("serve", help="run BLE session + event pump")
+    serve.add_argument(
+        "--transport",
+        choices=["mock", "ble"],
+        default="mock",
+        help="mock=in-memory session; ble=real Nordic UART central via bleak",
+    )
+    serve.add_argument("--device-address", help="BLE device address (ble transport)")
+    serve.add_argument("--device-name", help="BLE device advertising name (ble transport)")
+    serve.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=10.0,
+        help="seconds to wait for scan+connect (ble transport)",
+    )
     serve.add_argument("--playback", help="path to JSON-lines file to send")
     serve.add_argument("--demo", action="store_true", help="enqueue built-in demo event sequence")
     serve.add_argument("--max-steps", type=int, default=None, help="optional server loop step limit")

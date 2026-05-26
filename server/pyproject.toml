@@ -14,6 +14,11 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# Real BLE/NUS transport (Slice 2). Optional so that the host-side test
+# matrix stays installable without a bluetooth stack.
+transport = ["bleak>=0.21"]
+# Bridge subscriber (Slice 1). Lets the bridge connect to PRE's live WS.
+bridge = ["websockets>=12"]
 
 [project.scripts]
 pre-buddy = "pre_buddy.cli:main"

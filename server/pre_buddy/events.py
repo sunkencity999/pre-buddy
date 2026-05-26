@@ -1,7 +1,7 @@
 """Typed event model for the ``pre.*`` wire protocol.
 
-The Python side and the C++ firmware core share the same canonical names
-defined in ``shared/protocol/events.md``. Keep both in lockstep.
+The Python side and the C++ firmware core share canonical names defined in
+``shared/protocol/events.md``. Keep both in lockstep.
 """
 
 from __future__ import annotations
@@ -17,10 +17,24 @@ class Character(str, Enum):
     SENTINEL = "sentinel"
 
 
+class Tier(str, Enum):
+    FAST = "fast"
+    STANDARD = "standard"
+    FRONTIER = "frontier"
+
+
 class EventKind(str, Enum):
     WAKE_WORD = "pre.system.wake_word"
     BG_AGENT_CHANGE = "pre.bg_agents.change"
+    ROUTER_DECISION = "pre.router.decision"
     CONFIDENCE_WARNING = "pre.confidence.warning"
+    CONFIDENCE_SNAPSHOT = "pre.confidence.snapshot"
+    KG_DELTA = "pre.kg.delta"
+    TRAINING_PROGRESS = "pre.training.progress"
+    SCHEDULER_UPCOMING = "pre.scheduler.upcoming"
+    TOOLS_ROLLUP = "pre.tools.rollup"
+    MEMORY_WRITE = "pre.system.memory_write"
+    PROXIMITY = "pre.system.proximity"
     ERROR = "pre.system.error"
     CHARACTER_SET = "pre.character.set"
 
@@ -40,20 +54,30 @@ class WakeWordData:
 class BgAgentChangeData:
     agent_id: str
     state: str   # "started" | "running" | "finished" | "failed"
-    tier: str    # "fast" | "standard" | "frontier"
+    tier: str | Tier   # "fast" | "standard" | "frontier"
 
     _VALID_STATES: ClassVar[frozenset[str]] = frozenset(
         {"started", "running", "finished", "failed"}
-    )
-    _VALID_TIERS: ClassVar[frozenset[str]] = frozenset(
-        {"fast", "standard", "frontier"}
     )
 
     def __post_init__(self) -> None:
         if self.state not in self._VALID_STATES:
             raise ValueError(f"invalid state: {self.state!r}")
-        if self.tier not in self._VALID_TIERS:
-            raise ValueError(f"invalid tier: {self.tier!r}")
+        if isinstance(self.tier, str):
+            self.tier = Tier(self.tier)
+
+
+@dataclass
+class RouterDecisionData:
+    from_tier: str | Tier
+    to_tier: str | Tier
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if isinstance(self.from_tier, str):
+            self.from_tier = Tier(self.from_tier)
+        if isinstance(self.to_tier, str):
+            self.to_tier = Tier(self.to_tier)
 
 
 @dataclass
@@ -70,6 +94,74 @@ class ConfidenceWarningData:
 
 
 @dataclass
+class ConfidenceSnapshotData:
+    weakest_domain: str
+    confidence: float
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be in [0,1]")
+
+
+@dataclass
+class KgDeltaData:
+    entities_added: int = 0
+    relations_added: int = 0
+
+    def __post_init__(self) -> None:
+        if self.entities_added < 0 or self.relations_added < 0:
+            raise ValueError("entity/relation deltas must be >= 0")
+
+
+@dataclass
+class TrainingProgressData:
+    examples_total: int
+    goal_examples: int
+
+    def __post_init__(self) -> None:
+        if self.examples_total < 0 or self.goal_examples < 0:
+            raise ValueError("example counts must be >= 0")
+
+
+@dataclass
+class SchedulerUpcomingData:
+    event_name: str
+    minutes_until: int
+
+    def __post_init__(self) -> None:
+        if self.minutes_until < 0:
+            raise ValueError("minutes_until must be >= 0")
+
+
+@dataclass
+class ToolsRollupData:
+    tool: str
+    calls: int
+    success_rate: float
+
+    def __post_init__(self) -> None:
+        if self.calls < 0:
+            raise ValueError("calls must be >= 0")
+        if not 0.0 <= self.success_rate <= 1.0:
+            raise ValueError("success_rate must be in [0,1]")
+
+
+@dataclass
+class MemoryWriteData:
+    key: str
+    source: str = "unknown"
+
+
+@dataclass
+class ProximityData:
+    distance_cm: float
+
+    def __post_init__(self) -> None:
+        if self.distance_cm < 0.0:
+            raise ValueError("distance_cm must be >= 0")
+
+
+@dataclass
 class ErrorData:
     code: str
     message: str = ""
@@ -80,7 +172,6 @@ class CharacterSetData:
     character: Character
 
     def __post_init__(self) -> None:
-        # Allow plain strings for convenience.
         if isinstance(self.character, str):
             self.character = Character(self.character)
 
@@ -99,7 +190,6 @@ class Event:
         payload: Any
         if hasattr(self.data, "__dataclass_fields__"):
             payload = asdict(self.data)
-            # Unwrap Enums (Character) to their .value
             for k, v in list(payload.items()):
                 if isinstance(v, Enum):
                     payload[k] = v.value
@@ -130,7 +220,15 @@ class Event:
 _HYDRATORS: dict[EventKind, type] = {
     EventKind.WAKE_WORD: WakeWordData,
     EventKind.BG_AGENT_CHANGE: BgAgentChangeData,
+    EventKind.ROUTER_DECISION: RouterDecisionData,
     EventKind.CONFIDENCE_WARNING: ConfidenceWarningData,
+    EventKind.CONFIDENCE_SNAPSHOT: ConfidenceSnapshotData,
+    EventKind.KG_DELTA: KgDeltaData,
+    EventKind.TRAINING_PROGRESS: TrainingProgressData,
+    EventKind.SCHEDULER_UPCOMING: SchedulerUpcomingData,
+    EventKind.TOOLS_ROLLUP: ToolsRollupData,
+    EventKind.MEMORY_WRITE: MemoryWriteData,
+    EventKind.PROXIMITY: ProximityData,
     EventKind.ERROR: ErrorData,
     EventKind.CHARACTER_SET: CharacterSetData,
 }

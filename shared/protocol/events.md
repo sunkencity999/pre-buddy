@@ -1,79 +1,74 @@
 # PRE Buddy Wire Protocol — `pre.*` Event Namespace
 
-> **Status:** Draft v0.1 (matches DESIGN.md v2)
+> **Status:** Draft v0.2 (robot-primary, v1 event surface)
 > **Single source of truth** for event names + payload shapes shared between
-> server (`pre_buddy` Python package) and firmware (C++ core).
->
-> Both sides MUST be updated together when this file changes.
+> server (`pre_buddy` Python package) and firmware core (C++).
+
+Both sides MUST be updated together when this file changes.
 
 ## 1. Transport
 
 - Layer 0: BLE NUS (Anthropic-compatible UUIDs), JSON-lines framing.
-- Anthropic's app ignores `pre.*` events; PRE Buddy ignores Anthropic events
-  it does not understand. Forward-compat is preserved by the `pre.` prefix.
+- Anthropic app ignores `pre.*`; PRE Buddy ignores unknown non-`pre.*` events.
+- One JSON object per line.
 
 ## 2. Envelope
 
-Every event is one JSON object per line:
-
 ```json
-{"event": "pre.<namespace>.<name>", "ts": 1748140800.123, "data": { ... }}
+{"event": "pre.<namespace>.<name>", "ts": 1748140800.123, "data": {}}
 ```
 
-- `event` — required, dotted string.
-- `ts` — optional, float seconds since UNIX epoch. Server emits, firmware may omit.
-- `data` — required object (may be empty).
+- `event` — required dotted string
+- `ts` — optional float (unix seconds)
+- `data` — required object (may be `{}`)
 
-## 3. Namespaces (initial set, expanded over time)
+## 3. v1 event catalog (implemented now)
 
-| Namespace | Direction | Purpose |
+### System + character
+
+| Event | Direction | Payload |
 |---|---|---|
-| `pre.bg_agents.*` | server → device | background agent state |
-| `pre.router.*` | server → device | model routing decisions |
-| `pre.confidence.*` | server → device | confidence dial updates |
-| `pre.kg.*` | server → device | knowledge graph deltas |
-| `pre.training.*` | server → device | LoRA accumulator state |
-| `pre.tools.*` | server → device | tool call rollups |
-| `pre.character.*` | bidirectional | character selection |
-| `pre.embodiment.*` | server → device | motion + LED commands (robot only) |
-| `pre.servo.*` | server → device | direct servo control (robot only) |
-| `pre.led.*` | server → device | direct LED control (robot only) |
-| `pre.voice.*` | bidirectional | wake word, transcripts, TTS chunks |
-| `pre.system.*` | bidirectional | heartbeat, error, pairing |
+| `pre.system.wake_word` | device→server (+echo back for reaction) | `{ "source_mic": "left"\|"right"\|"unknown" }` |
+| `pre.system.memory_write` | server→device | `{ "key": string, "source": string }` |
+| `pre.system.proximity` | device→server | `{ "distance_cm": number >= 0 }` |
+| `pre.system.error` | bidirectional | `{ "code": string, "message": string }` |
+| `pre.character.set` | bidirectional | `{ "character": "sage"\|"sprout"\|"sentinel" }` |
 
-## 4. Events covered by initial firmware/server tests
+### Introspection panels
 
-These are the events the host-testable core in `firmware/core/` and the
-Python `pre_buddy` package both understand today.
+| Event | Direction | Payload |
+|---|---|---|
+| `pre.bg_agents.change` | server→device | `{ "agent_id": string, "state": "started"\|"running"\|"finished"\|"failed", "tier": "fast"\|"standard"\|"frontier" }` |
+| `pre.router.decision` | server→device | `{ "from_tier": "fast"\|"standard"\|"frontier", "to_tier": "fast"\|"standard"\|"frontier", "reason": string }` |
+| `pre.confidence.warning` | server→device | `{ "domain": string, "confidence": number [0,1], "threshold": number [0,1] }` |
+| `pre.confidence.snapshot` | server→device | `{ "weakest_domain": string, "confidence": number [0,1] }` |
+| `pre.kg.delta` | server→device | `{ "entities_added": int >= 0, "relations_added": int >= 0 }` |
+| `pre.training.progress` | server→device | `{ "examples_total": int >= 0, "goal_examples": int >= 0 }` |
+| `pre.scheduler.upcoming` | server→device | `{ "event_name": string, "minutes_until": int >= 0 }` |
+| `pre.tools.rollup` | server→device | `{ "tool": string, "calls": int >= 0, "success_rate": number [0,1] }` |
 
-### `pre.system.wake_word`
-- Direction: device → server, then echo server → device for character reaction
-- Data: `{ "source_mic": "left"|"right"|"unknown" }`
+## 4. Embodiment mapping (firmware core)
 
-### `pre.bg_agents.change`
-- Direction: server → device
-- Data: `{ "agent_id": str, "state": "started"|"running"|"finished"|"failed", "tier": "fast"|"standard"|"frontier" }`
+Mapping lives in `firmware/core/include/pre_buddy/protocol.h`.
 
-### `pre.confidence.warning`
-- Direction: server → device
-- Data: `{ "domain": str, "confidence": float (0..1), "threshold": float }`
+- `wake_word` → head turn toward dominant mic (+ sprout yellow accent)
+- `bg_agents.change` → LED-only by tier (fast=green, standard=blue, frontier=purple)
+- `router.decision` → LED by `to_tier`; only escalation causes subtle nod
+- `confidence.warning` → head tilt + amber
+- `memory_write` → slow nod + white
+- `proximity` → look up
+- `error` → red, no motion
+- `character.set` → acknowledge nod in selected character idle color
 
-### `pre.system.error`
-- Direction: server → device or device → server
-- Data: `{ "code": str, "message": str }`
-
-### `pre.character.set`
-- Direction: bidirectional
-- Data: `{ "character": "sage"|"sprout"|"sentinel" }`
-
-### `pre.embodiment.command`
-- Direction: server → device (also emitted internally by firmware in response to incoming events)
-- Data: `{ "head_x_deg": float, "head_y_deg": float, "led_color": "blue"|"green"|"amber"|"red"|"white"|"off", "duration_ms": int, "ease": "linear"|"in_out" }`
+All other v1 panel updates are LED-only (low-distraction ambient mode).
 
 ## 5. Safety invariants
 
-- `head_y_deg` MUST be clamped to `[10.0, 80.0]` before reaching the servo.
-- `head_x_deg` is unbounded modulo 360, but rate-limited: no more than
-  `MAX_DEG_PER_SEC` (default 180°/s) change between consecutive commands.
-- LED red is reserved for `error` and confidence-below-threshold warnings
-  (amber for warning, red for error).
+- `head_y_deg` MUST be clamped to `[10.0, 80.0]` before servo output.
+- X-axis commands are rate-limited to `MAX_DEG_PER_SEC` (default 180°/s).
+- Error state reserves `red`; warning uses `amber`.
+
+## 6. Compatibility rule
+
+- Unknown `event` names MUST be ignored safely.
+- Additional fields in `data` MUST be tolerated (forward-compat).

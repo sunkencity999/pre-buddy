@@ -1,21 +1,42 @@
 # Protocol
 
-The canonical wire-protocol specification lives in
-[`../shared/protocol/events.md`](../shared/protocol/events.md). This page is a
-human-friendly companion: design notes, change history, and worked examples.
+Canonical spec: [`../shared/protocol/events.md`](../shared/protocol/events.md).
 
-> 🚧 Placeholder. Filled in as the protocol stabilizes. See DESIGN.md §7.
+This page explains implementation intent and where to edit code when adding an
+event.
 
-## Why one source of truth?
+## Where the contract is enforced
 
-Both the C++ firmware core (`firmware/core/include/pre_buddy/protocol.h`) and
-the Python server package (`server/pre_buddy/events.py`) must agree on every
-event name and payload field. The shared spec at `shared/protocol/events.md`
-is the contract — update it first, then mirror in both sides, then update
-tests on both sides in the same commit.
+- **Python server model:** `server/pre_buddy/events.py`
+- **Firmware parser + mapping:** `firmware/core/include/pre_buddy/protocol.h`
+- **Server tests:** `server/tests/test_events.py`
+- **Firmware tests:** `firmware/test/test_protocol.cpp`
 
-## Anthropic-compat boundary
+When introducing a new event:
+1. Update `shared/protocol/events.md`
+2. Add/update typed payload in Python
+3. Add/update C++ event parsing + embodiment mapping
+4. Add tests on both sides in the same commit
 
-We reuse Anthropic's BLE NUS UUIDs and JSON-lines framing. They own anything
-without a `pre.` prefix; we own anything with one. No fork; both stacks can
-coexist on the same device.
+## v1 implemented events
+
+- `pre.system.wake_word`
+- `pre.bg_agents.change`
+- `pre.router.decision`
+- `pre.confidence.warning`
+- `pre.confidence.snapshot`
+- `pre.kg.delta`
+- `pre.training.progress`
+- `pre.scheduler.upcoming`
+- `pre.tools.rollup`
+- `pre.system.memory_write`
+- `pre.system.proximity`
+- `pre.system.error`
+- `pre.character.set`
+
+## Compatibility expectations
+
+- Unknown events are ignored safely.
+- `data` payloads should tolerate additive fields.
+- `pre.*` namespace is owned by PRE Buddy; all non-`pre.*` behavior remains
+  Anthropic-compatible BLE/NUS framing.

@@ -3,6 +3,8 @@
 
 #include "esp32_led.h"
 
+#include "pre_buddy/led_palette.h"
+
 namespace pre_buddy::esp32 {
 
 void Esp32LedDriver::init() noexcept {
@@ -13,8 +15,13 @@ void Esp32LedDriver::init() noexcept {
 void Esp32LedDriver::set_color(LedColor color) noexcept {
     if (!initialised_) return;
     last_color_ = color;
-    // TODO: convert LedColor → RGB triplet (palette in pre_buddy::leds?)
-    // then push frame via RMT.
+    // Palette lives in firmware/core/include/pre_buddy/led_palette.h and
+    // is host-tested for all 9 colours; here we just project it through
+    // the current brightness setting.
+    const auto rgb = apply_brightness(to_rgb888(color), brightness_);
+    (void)rgb;
+    // TODO: pack rgb into the SK6812 GRB byte order and rmt_transmit
+    // the frame via the configured tx channel.
 }
 
 void Esp32LedDriver::set_brightness(unsigned char level) noexcept {

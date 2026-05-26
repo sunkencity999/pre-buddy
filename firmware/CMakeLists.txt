@@ -23,6 +23,9 @@ add_executable(pre_buddy_host_tests
   test/test_protocol.cpp
   test/test_expression.cpp
   test/test_character_picker.cpp
+  test/test_character_store.cpp
+  test/test_sprite_atlas.cpp
+  test/test_driver_math.cpp
   test/test_hal_mock.cpp
   test/test_robot_loop.cpp
 )

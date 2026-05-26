@@ -23,15 +23,16 @@ bool Esp32BleTransport::is_connected() const noexcept {
 }
 
 bool Esp32BleTransport::has_incoming() const noexcept {
-    // TODO: peek an internal ring buffer fed by the RX write callback.
-    return false;
+    // framer_ is fed inside the RX callback (see TODO in start()).
+    return framer_.has_line();
 }
 
 std::size_t Esp32BleTransport::pop_incoming(char* out_buf, std::size_t max_len) noexcept {
-    (void)out_buf;
-    (void)max_len;
-    // TODO: drain one line from the RX ring buffer (newline-framed).
-    return 0;
+    if (!framer_.has_line()) return 0;
+    const auto line = framer_.pop_line();
+    const auto n = (line.size() < max_len) ? line.size() : max_len;
+    std::memcpy(out_buf, line.data(), n);
+    return n;
 }
 
 bool Esp32BleTransport::send_line(std::string_view line) noexcept {

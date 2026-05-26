@@ -8,10 +8,12 @@
 // directory is opened as an ESP-IDF project (idf.py build).
 
 #include "esp32_ble.h"
+#include "esp32_character_store.h"
 #include "esp32_display.h"
 #include "esp32_led.h"
 #include "esp32_servo.h"
 
+#include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
 #include "pre_buddy/character_picker.h"
 #include "pre_buddy/protocol.h"
@@ -48,26 +50,33 @@ void app_main() {
     led.init();
     display.init();
 
-    // First-boot character pick. The CharacterPicker state machine is
-    // host-testable; the loop below is the ESP32-only glue that drives
-    // it from CoreS3 buttons / touch events.
-    //
-    // TODO when CoreS3 lands:
-    //  - Check NVS for a stored character; skip this block if present.
-    //  - Render each candidate face on the IPS screen during cycling.
-    //  - Treat short-press = next, long-press = confirm.
-    pb::CharacterPicker picker;
-    // while (!picker.is_confirmed()) {
-    //     display.show_character(picker.current());
-    //     if (short_press()) picker.next();
-    //     if (long_press())  picker.confirm();
-    //     vTaskDelay(pdMS_TO_TICKS(50));
-    // }
-    pb::Character chosen = picker.is_confirmed() ? picker.confirm() : pb::Character::Sage;
+    pb_esp::Esp32NvsCharacterStore store;
+    store.init();
+
+    // Boot flow: load the saved character if there is one; otherwise
+    // walk the user through the first-boot picker. The picker state
+    // machine is host-testable — only the input loop (short-press =
+    // next, long-press = confirm) waits on the CoreS3 buttons.
+    auto outcome = pb::determine_initial_character(
+        store,
+        [&display](pb::CharacterPicker& picker) {
+            // TODO when CoreS3 lands: replace this with the real input
+            // loop. The shape is:
+            //
+            //   while (!picker.is_confirmed()) {
+            //       display.show_character(picker.current());
+            //       if (short_press()) picker.next();
+            //       if (long_press())  return picker.confirm();
+            //       vTaskDelay(pdMS_TO_TICKS(50));
+            //   }
+            //   return picker.confirm();
+            (void)display;
+            return picker.confirm();  // default = Sage
+        });
 
     ble.start("pre-buddy");
 
-    pb::RobotLoop loop(chosen, servo, led, display);
+    pb::RobotLoop loop(outcome.character, servo, led, display);
     loop.reset_to_idle();
 
     // Main pump. The ESP-IDF idle task scheduler keeps us cooperative if

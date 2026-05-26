@@ -11,6 +11,7 @@ idf_component_register(
         "esp32_led.cpp"
         "esp32_display.cpp"
         "esp32_ble.cpp"
+        "esp32_character_store.cpp"
     INCLUDE_DIRS
         "."
         "${CMAKE_CURRENT_LIST_DIR}/../../core/include"

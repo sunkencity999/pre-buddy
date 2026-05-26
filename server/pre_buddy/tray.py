@@ -28,6 +28,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
+import json
+
 from . import autostart, config
 
 
@@ -117,7 +119,12 @@ class TrayController:
     # ── verbs ─────────────────────────────────────────────────────────
 
     def connect(self) -> None:
-        """Open the BLE transport. Idempotent on already-connected."""
+        """Open the BLE transport. Idempotent on already-connected.
+
+        After a successful connect we push the configured character to
+        the device, so the user's last choice survives device reboots
+        without them having to touch the tray menu.
+        """
         with self._lock:
             if self.state is TrayState.CONNECTED:
                 return
@@ -138,6 +145,20 @@ class TrayController:
         with self._lock:
             self._transport = transport
             self.state = TrayState.CONNECTED
+
+        # Resync character identity to the device. A failure here doesn't
+        # invalidate the connection — log and continue.
+        try:
+            payload = json.dumps(
+                {"event": "pre.character.set",
+                 "data": {"character": self.current_character()}},
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            transport.send_line(payload)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"character resync: {exc}"
+
         self._emit_change()
 
     def disconnect(self) -> None:
@@ -178,6 +199,37 @@ class TrayController:
 
     def toggle_autostart(self) -> None:
         self.set_autostart(not self.is_autostart_enabled())
+
+    # ── character identity ────────────────────────────────────────────
+
+    def current_character(self) -> str:
+        c = (self.cfg.character or "sage").lower()
+        return c if c in {"sage", "sprout", "sentinel"} else "sage"
+
+    def set_character(self, name: str) -> None:
+        """Persist the choice and, if currently connected, push it to
+        the device via a ``pre.character.set`` event."""
+        name = name.lower().strip()
+        if name not in {"sage", "sprout", "sentinel"}:
+            raise ValueError(f"unknown character: {name!r}")
+        cfg = self.cfg
+        cfg.character = name
+        config.save(cfg, self.config_path)
+        # Only push to the device if a transport is open — otherwise the
+        # next `connect()` will resync from config and send it then.
+        with self._lock:
+            transport = self._transport
+        if transport is not None:
+            try:
+                payload = json.dumps(
+                    {"event": "pre.character.set", "data": {"character": name}},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                transport.send_line(payload)  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"character-set push: {exc}"
+        self._emit_change()
 
     def open_viewer(self) -> None:
         self.viewer_spawner(self.cfg.viewer_port)
@@ -259,6 +311,25 @@ def _build_menu(controller: TrayController):
         controller.quit_app()
         icon.stop()
 
+    def _make_character_handler(name: str):
+        def handler(icon, _item):
+            controller.set_character(name)
+            _refresh(icon)
+
+        return handler
+
+    character_menu = pystray.Menu(
+        *(
+            Item(
+                name.capitalize(),
+                _make_character_handler(name),
+                checked=lambda _, n=name: controller.current_character() == n,
+                radio=True,
+            )
+            for name in ("sage", "sprout", "sentinel")
+        )
+    )
+
     return pystray.Menu(
         Item(lambda _: controller.status_text(), None, enabled=False),
         Sep,
@@ -268,6 +339,7 @@ def _build_menu(controller: TrayController):
             default=True,
         ),
         Sep,
+        Item("Character", character_menu),
         Item("Open Viewer", _on_open_viewer),
         Item("Run Setup…", _on_run_setup),
         Sep,

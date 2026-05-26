@@ -39,18 +39,20 @@ class RobotLoop {
     // Returns the EmbodimentCommand that was executed (useful for tests
     // and for logging on the device).
     EmbodimentCommand dispatch(const Event& ev) noexcept {
+        // CharacterSet mutates state BEFORE we re-map, so the
+        // expression dispatched downstream uses the new character.
+        if (ev.kind == EventKind::CharacterSet) {
+            character_ = ev.character;
+            display_.show_character(character_);
+        }
+
         EmbodimentCommand cmd = map_event(ev, character_);
         led_.set_color(cmd.led);
+        display_.show_expression(character_, cmd.expression);
 
         if (cmd.has_motion) {
             cmd.motion = motion_.clamp(cmd.motion);
             servo_.move(cmd.motion);
-        }
-
-        // CharacterSet is the only event that mutates RobotLoop state.
-        if (ev.kind == EventKind::CharacterSet) {
-            character_ = ev.character;
-            display_.show_character(character_);
         }
 
         return cmd;

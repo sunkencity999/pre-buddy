@@ -140,56 +140,49 @@ section {
   transition: background 0.4s ease, box-shadow 0.4s ease;
 }
 
+/* SVG face inside the robot head. viewer.js redraws its children per
+ * (character, expression) on every step. */
 .robot-face {
   position: absolute;
-  inset: 38px 0 0 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
+  inset: 36px 14px 14px 14px;
+  width: calc(100% - 28px);
+  height: calc(100% - 50px);
+  pointer-events: none;
 }
 
-.eye {
-  width: 16px;
-  height: 16px;
-  background: #0b0f17;
-  border-radius: 50%;
-  display: inline-block;
+.robot-face .face-eye {
+  fill: #0b0f17;
+  transition: transform 0.25s ease, opacity 0.25s ease, rx 0.25s ease, ry 0.25s ease;
 }
 
-.robot-face::before {
-  content: "";
-  display: flex;
-  gap: 18px;
+.robot-face .face-brow {
+  stroke: #0b0f17;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  fill: none;
+  transition: transform 0.25s ease, d 0.25s ease;
 }
 
-.robot-face .left, .robot-face .right {
-  /* placed via JS as siblings; here we just style them */
+.robot-face .face-mouth {
+  stroke: #0b0f17;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  fill: none;
+  transition: d 0.25s ease;
 }
 
-.robot-face > .eye + .eye {
-  margin-top: -16px;  /* tuck so flex shows them side by side via wrap below */
+/* Character-specific identity tweaks. */
+.robot-face[data-character="sage"] .face-eye { transform-origin: center; }
+.robot-face[data-character="sprout"] .face-eye { fill: #14233f; }
+.robot-face[data-character="sentinel"] .face-eye {
+  /* Sentinel uses narrow vertical slits — viewer.js sets the geometry,
+   * here we just sharpen the stroke. */
+  fill: #0b0f17;
 }
 
-/* simpler: use a 2-eye row */
-.robot-face {
-  inset: 44px 22px 0 22px;
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.robot-face .mouth {
-  position: absolute;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 30px;
-  height: 4px;
-  background: #0b0f17;
-  border-radius: 2px;
-  opacity: 0.6;
-}
+/* Hidden fallback markup retained for accessibility tools that don't
+ * read SVG content. */
+.robot-face-fallback { display: none; }
 
 .robot-base {
   position: absolute;

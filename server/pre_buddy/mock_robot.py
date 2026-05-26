@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .events import Character, Event, EventKind, Tier
+from .events import Character, Event, EventKind, Expression, Tier
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class SimResponse:
     head_y_deg: float
     duration_ms: int
     note: str
+    expression: str = Expression.NEUTRAL.value
 
 
 def _idle_led(character: Character) -> str:
@@ -54,6 +55,41 @@ def _tier_led(tier: Tier) -> str:
     return "purple"
 
 
+def _expression_for(event: Event) -> str:
+    """Mirror the firmware's map_event() → Expression mapping (protocol.h)."""
+    kind = event.kind
+    if kind is EventKind.WAKE_WORD:
+        return Expression.SURPRISED.value
+    if kind is EventKind.BG_AGENT_CHANGE:
+        return Expression.THINKING.value
+    if kind is EventKind.ROUTER_DECISION:
+        escalating = _tier_rank(event.data.to_tier) > _tier_rank(event.data.from_tier)
+        return Expression.CURIOUS.value if escalating else Expression.THINKING.value
+    if kind is EventKind.CONFIDENCE_WARNING:
+        return Expression.CONCERNED.value
+    if kind is EventKind.CONFIDENCE_SNAPSHOT:
+        confidence = getattr(event.data, "confidence", 1.0)
+        return Expression.CONCERNED.value if confidence < 0.7 else Expression.NEUTRAL.value
+    if kind is EventKind.KG_DELTA:
+        return Expression.THINKING.value
+    if kind is EventKind.TRAINING_PROGRESS:
+        return Expression.THINKING.value
+    if kind is EventKind.SCHEDULER_UPCOMING:
+        near = event.data.minutes_until <= 120
+        return Expression.SURPRISED.value if near else Expression.NEUTRAL.value
+    if kind is EventKind.TOOLS_ROLLUP:
+        return Expression.NEUTRAL.value
+    if kind is EventKind.MEMORY_WRITE:
+        return Expression.HAPPY.value
+    if kind is EventKind.PROXIMITY:
+        return Expression.CURIOUS.value
+    if kind is EventKind.ERROR:
+        return Expression.ERROR.value
+    if kind is EventKind.CHARACTER_SET:
+        return Expression.HAPPY.value
+    return Expression.NEUTRAL.value
+
+
 def simulate_event(event: Event, character: Character, *, severity: str = "normal") -> SimResponse:
     """Return likely robot behavior for one event and character profile.
 
@@ -67,6 +103,7 @@ def simulate_event(event: Event, character: Character, *, severity: str = "norma
     y = 45.0
     duration = _reaction_ms(character)
     note = "idle"
+    expression = _expression_for(event)
 
     if severity not in {"quiet", "normal", "loud"}:
         raise ValueError(f"invalid severity: {severity}")
@@ -174,4 +211,5 @@ def simulate_event(event: Event, character: Character, *, severity: str = "norma
         head_y_deg=y,
         duration_ms=duration,
         note=note,
+        expression=expression,
     )

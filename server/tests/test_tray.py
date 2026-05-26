@@ -34,6 +34,9 @@ class FakeTransport:
         self.close_calls += 1
         self.connected = False
 
+    def send_line(self, line: str) -> None:
+        self.sent_lines.append(line)
+
 
 @dataclass
 class ViewerRecorder:
@@ -257,3 +260,88 @@ def test_on_change_callback_exceptions_dont_break_state(tmp_path: Path) -> None:
     ctrl.on_change = explode
     ctrl.connect()
     assert ctrl.state is TrayState.CONNECTED
+
+
+# ── character ─────────────────────────────────────────────────────────
+
+
+def test_set_character_persists_to_config(tmp_path: Path) -> None:
+    _seed_config(tmp_path / "c.json", device_name="x", character="sage")
+    ctrl, _, _ = _make_controller(
+        cfg_path=tmp_path / "c.json", autostart_path=tmp_path / "x.desktop"
+    )
+    ctrl.set_character("sprout")
+    assert ctrl.current_character() == "sprout"
+    assert config.load(tmp_path / "c.json").character == "sprout"
+
+
+def test_set_character_rejects_unknown_name(tmp_path: Path) -> None:
+    _seed_config(tmp_path / "c.json", device_name="x")
+    ctrl, _, _ = _make_controller(
+        cfg_path=tmp_path / "c.json", autostart_path=tmp_path / "x.desktop"
+    )
+    with pytest.raises(ValueError):
+        ctrl.set_character("dreamer")
+
+
+def test_set_character_when_connected_pushes_pre_character_set(tmp_path: Path) -> None:
+    # The tray is the only path through which the device discovers the
+    # user's choice mid-session. Confirm a pre.character.set line lands
+    # on the transport whenever set_character is called while connected.
+    _seed_config(tmp_path / "c.json", device_name="x", character="sage")
+    t = FakeTransport(config.Config(character="sage"))
+    ctrl, _, _ = _make_controller(
+        cfg_path=tmp_path / "c.json",
+        autostart_path=tmp_path / "x.desktop",
+        transport=t,
+    )
+    ctrl.connect()
+    # Reset sent_lines so we ignore the connect-time resync push.
+    t.sent_lines.clear()
+
+    ctrl.set_character("sentinel")
+
+    assert len(t.sent_lines) == 1
+    line = t.sent_lines[0]
+    assert '"pre.character.set"' in line
+    assert '"sentinel"' in line
+
+
+def test_set_character_when_disconnected_is_silent(tmp_path: Path) -> None:
+    # No transport → no BLE write attempted. Picking offline must still
+    # persist to disk so the next connect picks it up.
+    _seed_config(tmp_path / "c.json", device_name="x", character="sage")
+    ctrl, _, _ = _make_controller(
+        cfg_path=tmp_path / "c.json", autostart_path=tmp_path / "x.desktop"
+    )
+    ctrl.set_character("sprout")
+    assert ctrl.current_character() == "sprout"
+
+
+def test_connect_resyncs_character_to_device(tmp_path: Path) -> None:
+    # When a user pre-picks a character offline (or via the wizard), then
+    # later opens the tray and clicks Connect, the device should learn
+    # the choice immediately — no manual menu click required.
+    _seed_config(tmp_path / "c.json", device_name="x", character="sprout")
+    ctrl, _, built = _make_controller(
+        cfg_path=tmp_path / "c.json", autostart_path=tmp_path / "x.desktop"
+    )
+    ctrl.connect()
+    sent = built[0].sent_lines
+    assert sent, "expected a pre.character.set push on connect"
+    assert any('"pre.character.set"' in line and '"sprout"' in line for line in sent)
+
+
+def test_current_character_falls_back_to_sage_on_garbage(tmp_path: Path) -> None:
+    # Manually corrupt the on-disk character so the tray sees a value
+    # it doesn't know. It should still surface "sage" instead of erroring,
+    # so the menu radio always points at a valid item.
+    cfg_path = tmp_path / "c.json"
+    cfg_path.write_text(
+        '{"device_name": "x", "character": "weirdmood", "schema_version": 1}\n',
+        encoding="utf-8",
+    )
+    ctrl, _, _ = _make_controller(
+        cfg_path=cfg_path, autostart_path=tmp_path / "x.desktop"
+    )
+    assert ctrl.current_character() == "sage"

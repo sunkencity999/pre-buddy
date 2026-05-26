@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "pre_buddy/hal/i_ble_transport.h"
@@ -54,12 +55,16 @@ class MockLedDriver : public ILedDriver {
 class MockDisplayDriver : public IDisplayDriver {
    public:
     std::vector<Character> character_calls;
+    std::vector<std::pair<Character, Expression>> expression_calls;
     std::vector<std::string> banner_calls;
     std::vector<unsigned int> passkey_calls;
     int clear_calls = 0;
 
     void show_character(Character ch) noexcept override {
         character_calls.push_back(ch);
+    }
+    void show_expression(Character ch, Expression expr) noexcept override {
+        expression_calls.emplace_back(ch, expr);
     }
     void show_banner(std::string_view text) noexcept override {
         banner_calls.emplace_back(text);

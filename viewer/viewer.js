@@ -31,13 +31,126 @@
   // Mirrors mock_robot.simulate_event() output for the daily_flow scenario.
 
   const DEMO_TIMELINE = [
-    { scenario_index: 1, source_event: 'pre.system.wake_word',     led: 'yellow', has_motion: true,  head_x_deg: -35, head_y_deg: 45, duration_ms: 350, note: 'turn_toward_mic',        character: 'sprout', severity: 'normal' },
-    { scenario_index: 2, source_event: 'pre.bg_agents.change',     led: 'green',  has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'agent_tier_pulse',        character: 'sprout', severity: 'normal' },
-    { scenario_index: 3, source_event: 'pre.router.decision',      led: 'purple', has_motion: true,  head_x_deg: 0,   head_y_deg: 38, duration_ms: 550, note: 'router_escalation_nod',   character: 'sprout', severity: 'normal' },
-    { scenario_index: 4, source_event: 'pre.kg.delta',             led: 'cyan',   has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'kg_update',               character: 'sprout', severity: 'normal' },
-    { scenario_index: 5, source_event: 'pre.tools.rollup',         led: 'white',  has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'tools_rollup',            character: 'sprout', severity: 'normal' },
-    { scenario_index: 6, source_event: 'pre.system.proximity',     led: 'green',  has_motion: true,  head_x_deg: 0,   head_y_deg: 60, duration_ms: 700, note: 'look_up',                 character: 'sprout', severity: 'normal' },
+    { scenario_index: 1, source_event: 'pre.system.wake_word',     led: 'yellow', has_motion: true,  head_x_deg: -35, head_y_deg: 45, duration_ms: 350, note: 'turn_toward_mic',        expression: 'surprised', character: 'sprout', severity: 'normal' },
+    { scenario_index: 2, source_event: 'pre.bg_agents.change',     led: 'green',  has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'agent_tier_pulse',        expression: 'thinking',  character: 'sprout', severity: 'normal' },
+    { scenario_index: 3, source_event: 'pre.router.decision',      led: 'purple', has_motion: true,  head_x_deg: 0,   head_y_deg: 38, duration_ms: 550, note: 'router_escalation_nod',   expression: 'curious',   character: 'sprout', severity: 'normal' },
+    { scenario_index: 4, source_event: 'pre.kg.delta',             led: 'cyan',   has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'kg_update',               expression: 'thinking',  character: 'sprout', severity: 'normal' },
+    { scenario_index: 5, source_event: 'pre.tools.rollup',         led: 'white',  has_motion: false, head_x_deg: 0,   head_y_deg: 45, duration_ms: 350, note: 'tools_rollup',            expression: 'neutral',   character: 'sprout', severity: 'normal' },
+    { scenario_index: 6, source_event: 'pre.system.proximity',     led: 'green',  has_motion: true,  head_x_deg: 0,   head_y_deg: 60, duration_ms: 700, note: 'look_up',                 expression: 'curious',   character: 'sprout', severity: 'normal' },
   ];
+
+  // ── Face geometry ──────────────────────────────────────────────────────
+  // Per-character identity (eye shape + size) and per-expression overlay
+  // (mouth path, brow lift, eye squint). The viewBox is 100×80 so coords
+  // here are in that space.
+
+  // Eye geometry: {cx, cy, rx, ry} centers + radii for left/right eye.
+  // Sage = round + steady. Sprout = larger + more spaced. Sentinel = narrow vertical slits.
+  const CHARACTER_GEOM = {
+    sage:     { eye: { rx: 5,  ry: 5,  cy: 36, dx: 18 }, browY: 22 },
+    sprout:   { eye: { rx: 7,  ry: 6,  cy: 34, dx: 20 }, browY: 20 },
+    sentinel: { eye: { rx: 2,  ry: 8,  cy: 36, dx: 18 }, browY: 22 },
+  };
+
+  // Per-expression overlay deltas applied on top of the character base.
+  //   eyeDy:   shift eyes vertically (positive = down, for sleepy/concerned)
+  //   eyeScale: multiplier on rx/ry; <1 squints, >1 widens
+  //   browDy:  shift brows vertically (positive = lower / angrier)
+  //   browAngle: degrees, positive = outer end up (worried), negative = down (angry)
+  //   mouth:   svg path 'd' attribute
+  const EXPRESSIONS = {
+    //  Neutral / idle.
+    neutral:   { eyeDy: 0,  eyeScale: 1.0, browDy: 0,  browAngle: 0,   mouth: 'M 38 60 Q 50 60 62 60' },
+    //  Big eyes, raised brows, small "o" mouth.
+    surprised: { eyeDy: -1, eyeScale: 1.2, browDy: -4, browAngle: 0,   mouth: 'M 46 60 Q 50 66 54 60 Q 50 54 46 60 Z' },
+    //  Brows tilted up at the inner side (or just slightly higher), eyes
+    //  glance up-left, mouth a soft flat line.
+    thinking:  { eyeDy: -2, eyeScale: 0.9, browDy: -2, browAngle: 18,  mouth: 'M 40 60 L 60 60' },
+    //  Brows drawn down + together, mouth a frown.
+    concerned: { eyeDy: 1,  eyeScale: 0.85, browDy: 4, browAngle: -22, mouth: 'M 38 64 Q 50 56 62 64' },
+    //  Squinted-happy eyes, big smile.
+    happy:     { eyeDy: 0,  eyeScale: 0.6, browDy: -2, browAngle: 6,   mouth: 'M 38 58 Q 50 70 62 58' },
+    //  Half-closed eyes (very thin ovals), neutral brows, faint smile.
+    sleepy:    { eyeDy: 1,  eyeScale: 0.35, browDy: 2, browAngle: 0,   mouth: 'M 42 62 Q 50 64 58 62' },
+    //  Wide-ish eyes, one brow raised (we'll just lift the brows
+    //  slightly), small "hmm" mouth.
+    curious:   { eyeDy: -1, eyeScale: 1.1, browDy: -3, browAngle: 10,  mouth: 'M 42 60 Q 50 62 58 60' },
+    //  X eyes via crossed line groups (drawn separately), straight mouth.
+    error:     { eyeDy: 0,  eyeScale: 1.0, browDy: -6, browAngle: -30, mouth: 'M 40 62 L 60 62', xEyes: true },
+  };
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function svg(name, attrs) {
+    const el = document.createElementNS(SVG_NS, name);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v !== null && v !== undefined) el.setAttribute(k, String(v));
+    }
+    return el;
+  }
+
+  function renderFace(character, expression) {
+    const root = document.getElementById('robot-face');
+    if (!root) return;
+    const c = (character || 'sage').toLowerCase();
+    const e = (expression || 'neutral').toLowerCase();
+    const geom = CHARACTER_GEOM[c] || CHARACTER_GEOM.sage;
+    const overlay = EXPRESSIONS[e] || EXPRESSIONS.neutral;
+
+    // Tag the root with the active character so CSS rules can branch.
+    root.setAttribute('data-character', c);
+    root.setAttribute('data-expression', e);
+
+    // Wipe previous content and rebuild — simple and bug-resistant given
+    // we only repaint when the active row changes (max ~once per second
+    // on auto-play).
+    while (root.firstChild) root.removeChild(root.firstChild);
+
+    const eyeCy = geom.eye.cy + overlay.eyeDy;
+    const eyeRx = geom.eye.rx * overlay.eyeScale;
+    const eyeRy = geom.eye.ry * overlay.eyeScale;
+    const cxL = 50 - geom.eye.dx;
+    const cxR = 50 + geom.eye.dx;
+
+    if (overlay.xEyes) {
+      // Error state: draw X marks instead of eyes.
+      for (const cx of [cxL, cxR]) {
+        const s = 5;
+        root.appendChild(svg('line', {
+          x1: cx - s, y1: eyeCy - s, x2: cx + s, y2: eyeCy + s,
+          stroke: '#0b0f17', 'stroke-width': 2.2, 'stroke-linecap': 'round',
+        }));
+        root.appendChild(svg('line', {
+          x1: cx + s, y1: eyeCy - s, x2: cx - s, y2: eyeCy + s,
+          stroke: '#0b0f17', 'stroke-width': 2.2, 'stroke-linecap': 'round',
+        }));
+      }
+    } else {
+      root.appendChild(svg('ellipse', {
+        class: 'face-eye', cx: cxL, cy: eyeCy, rx: eyeRx, ry: eyeRy,
+      }));
+      root.appendChild(svg('ellipse', {
+        class: 'face-eye', cx: cxR, cy: eyeCy, rx: eyeRx, ry: eyeRy,
+      }));
+    }
+
+    // Brows — short lines above the eyes, optionally tilted.
+    const browY = geom.browY + overlay.browDy;
+    for (const [cx, sign] of [[cxL, +1], [cxR, -1]]) {
+      const len = 9;
+      const angle = overlay.browAngle * sign;
+      const rad = (angle * Math.PI) / 180;
+      const dx = Math.cos(rad) * (len / 2);
+      const dy = Math.sin(rad) * (len / 2);
+      root.appendChild(svg('line', {
+        class: 'face-brow',
+        x1: cx - dx, y1: browY - dy, x2: cx + dx, y2: browY + dy,
+      }));
+    }
+
+    // Mouth.
+    root.appendChild(svg('path', { class: 'face-mouth', d: overlay.mouth }));
+  }
 
   // ── State ──────────────────────────────────────────────────────────────
 
@@ -58,6 +171,7 @@
     rdEvent:   $('rd-event'),
     rdNote:    $('rd-note'),
     rdLed:     $('rd-led'),
+    rdFace:    $('rd-face'),
     rdHead:    $('rd-head'),
     rdDuration: $('rd-duration'),
     metaChar:  $('meta-character'),
@@ -90,8 +204,10 @@
       dom.rdLed.textContent = '—';
       dom.head.style.transform = 'rotateZ(0deg) rotateX(0deg)';
       dom.head.classList.remove('motion');
+      renderFace('sage', 'neutral');
       return;
     }
+    renderFace(row.character || 'sage', row.expression || 'neutral');
 
     const color = ledHex(row.led);
     dom.led.style.background = color;
@@ -115,6 +231,7 @@
 
     dom.rdEvent.textContent = row.source_event;
     dom.rdNote.textContent = row.note || '—';
+    if (dom.rdFace) dom.rdFace.textContent = `${row.character || 'sage'} · ${row.expression || 'neutral'}`;
     dom.rdHead.textContent = `x=${turnZ.toFixed(0)}° y=${(Number(row.head_y_deg) || 45).toFixed(0)}°`;
     dom.rdDuration.textContent = `${row.duration_ms || 0}ms` + (row.has_motion ? '' : ' · still');
   }

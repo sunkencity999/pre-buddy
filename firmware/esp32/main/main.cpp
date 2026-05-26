@@ -13,6 +13,7 @@
 #include "esp32_servo.h"
 
 #include "pre_buddy/character.h"
+#include "pre_buddy/character_picker.h"
 #include "pre_buddy/protocol.h"
 #include "pre_buddy/robot_loop.h"
 
@@ -46,9 +47,27 @@ void app_main() {
     servo.init();
     led.init();
     display.init();
+
+    // First-boot character pick. The CharacterPicker state machine is
+    // host-testable; the loop below is the ESP32-only glue that drives
+    // it from CoreS3 buttons / touch events.
+    //
+    // TODO when CoreS3 lands:
+    //  - Check NVS for a stored character; skip this block if present.
+    //  - Render each candidate face on the IPS screen during cycling.
+    //  - Treat short-press = next, long-press = confirm.
+    pb::CharacterPicker picker;
+    // while (!picker.is_confirmed()) {
+    //     display.show_character(picker.current());
+    //     if (short_press()) picker.next();
+    //     if (long_press())  picker.confirm();
+    //     vTaskDelay(pdMS_TO_TICKS(50));
+    // }
+    pb::Character chosen = picker.is_confirmed() ? picker.confirm() : pb::Character::Sage;
+
     ble.start("pre-buddy");
 
-    pb::RobotLoop loop(pb::Character::Sage, servo, led, display);
+    pb::RobotLoop loop(chosen, servo, led, display);
     loop.reset_to_idle();
 
     // Main pump. The ESP-IDF idle task scheduler keeps us cooperative if

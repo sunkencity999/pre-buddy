@@ -23,6 +23,23 @@ class Tier(str, Enum):
     FRONTIER = "frontier"
 
 
+class Expression(str, Enum):
+    """Mirror of firmware ``pre_buddy::Expression``.
+
+    Used by the simulator + viewer to render character-agnostic moods.
+    Keep in sync with ``firmware/core/include/pre_buddy/expression.h``.
+    """
+
+    NEUTRAL = "neutral"
+    SURPRISED = "surprised"
+    THINKING = "thinking"
+    CONCERNED = "concerned"
+    HAPPY = "happy"
+    SLEEPY = "sleepy"
+    CURIOUS = "curious"
+    ERROR = "error"
+
+
 class EventKind(str, Enum):
     WAKE_WORD = "pre.system.wake_word"
     BG_AGENT_CHANGE = "pre.bg_agents.change"

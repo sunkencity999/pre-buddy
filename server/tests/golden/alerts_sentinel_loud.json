@@ -2,6 +2,7 @@
   {
     "character": "sentinel",
     "duration_ms": 575,
+    "expression": "concerned",
     "has_motion": true,
     "head_x_deg": 0.0,
     "head_y_deg": 30.0,
@@ -14,6 +15,7 @@
   {
     "character": "sentinel",
     "duration_ms": 500,
+    "expression": "surprised",
     "has_motion": false,
     "head_x_deg": 0.0,
     "head_y_deg": 45.0,
@@ -26,6 +28,7 @@
   {
     "character": "sentinel",
     "duration_ms": 500,
+    "expression": "error",
     "has_motion": false,
     "head_x_deg": 0.0,
     "head_y_deg": 45.0,
@@ -38,6 +41,7 @@
   {
     "character": "sentinel",
     "duration_ms": 919,
+    "expression": "happy",
     "has_motion": true,
     "head_x_deg": 0.0,
     "head_y_deg": 35.0,

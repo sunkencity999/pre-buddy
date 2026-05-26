@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "pre_buddy/character.h"
+#include "pre_buddy/expression.h"
 
 namespace pre_buddy::hal {
 
@@ -20,6 +21,11 @@ class IDisplayDriver {
     // Render the chosen character's idle face. Called on boot, on
     // pre.character.set, and after recovery from sleep.
     virtual void show_character(Character ch) noexcept = 0;
+
+    // Update the on-screen face to the given (character, expression)
+    // pair. Called by RobotLoop on every dispatch — the implementation
+    // is expected to skip the redraw when the pair hasn't changed.
+    virtual void show_expression(Character ch, Expression expr) noexcept = 0;
 
     // Render an arbitrary short status banner. The implementation is
     // responsible for truncation / line-wrapping. Persistent until the

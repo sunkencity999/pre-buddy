@@ -30,6 +30,7 @@ def build_timeline_rows(
                 "head_y_deg": response.head_y_deg,
                 "duration_ms": response.duration_ms,
                 "note": response.note,
+                "expression": response.expression,
                 "character": character.value,
                 "severity": severity,
             }
@@ -72,6 +73,7 @@ def render_rows_csv(rows: Sequence[dict[str, object]]) -> str:
         "head_y_deg",
         "duration_ms",
         "note",
+        "expression",
         "character",
         "severity",
     ]

@@ -16,6 +16,15 @@ void Esp32DisplayDriver::show_character(Character ch) noexcept {
     // TODO: draw the corresponding character glyph from a sprite atlas.
 }
 
+void Esp32DisplayDriver::show_expression(Character ch, Expression expr) noexcept {
+    if (!initialised_) return;
+    (void)ch;
+    (void)expr;
+    // TODO: pick a sprite from the (character, expression) atlas (3×8
+    // sprites total) and push to the framebuffer. Skip the redraw when
+    // (ch, expr) match the last call to avoid unnecessary SPI traffic.
+}
+
 void Esp32DisplayDriver::show_banner(std::string_view text) noexcept {
     if (!initialised_) return;
     (void)text;

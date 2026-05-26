@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "pre_buddy/character.h"
+#include "pre_buddy/expression.h"
 #include "pre_buddy/motion.h"
 
 namespace pre_buddy {
@@ -50,6 +51,7 @@ inline EventKind parse_event_kind(std::string_view name) noexcept {
 struct EmbodimentCommand {
     MotionCommand motion;
     LedColor led;
+    Expression expression = Expression::Neutral;
     bool has_motion;  // false → no head movement (LED-only event)
 };
 
@@ -111,11 +113,13 @@ inline EmbodimentCommand map_event(const Event& ev, Character ch) noexcept {
             if (ev.source_mic == Event::Mic::Left) out.motion.head_x_deg = -35.0f;
             if (ev.source_mic == Event::Mic::Right) out.motion.head_x_deg = 35.0f;
             out.led = (ch == Character::Sprout) ? LedColor::Yellow : prof.idle_color;
+            out.expression = Expression::Surprised;
             break;
 
         case EventKind::BgAgentChange:
             out.has_motion = false;
             out.led = tier_color(ev.tier);
+            out.expression = Expression::Thinking;
             break;
 
         case EventKind::RouterDecision: {
@@ -126,6 +130,9 @@ inline EmbodimentCommand map_event(const Event& ev, Character ch) noexcept {
                 out.has_motion = true;
                 out.motion.head_y_deg = 38.0f;
                 out.motion.duration_ms = prof.reaction_ms + 200;
+                out.expression = Expression::Curious;
+            } else {
+                out.expression = Expression::Thinking;
             }
             break;
         }
@@ -135,33 +142,41 @@ inline EmbodimentCommand map_event(const Event& ev, Character ch) noexcept {
             out.motion.head_x_deg = 0.0f;
             out.motion.head_y_deg = 30.0f;  // tilt down a bit
             out.led = LedColor::Amber;
+            out.expression = Expression::Concerned;
             break;
 
         case EventKind::ConfidenceSnapshot:
             out.has_motion = false;
             // If confidence is low-ish, tint amber; otherwise idle color.
             out.led = (ev.confidence < 0.7f) ? LedColor::Amber : prof.idle_color;
+            out.expression = (ev.confidence < 0.7f) ? Expression::Concerned
+                                                    : Expression::Neutral;
             break;
 
         case EventKind::KgDelta:
             out.has_motion = false;
             out.led = LedColor::Cyan;
+            out.expression = Expression::Thinking;
             break;
 
         case EventKind::TrainingProgress:
             out.has_motion = false;
             out.led = LedColor::White;
+            out.expression = Expression::Thinking;
             break;
 
         case EventKind::SchedulerUpcoming:
             out.has_motion = false;
             // Near-term event: amber reminder pulse.
             out.led = (ev.minutes_until <= 120) ? LedColor::Amber : LedColor::Blue;
+            out.expression = (ev.minutes_until <= 120) ? Expression::Surprised
+                                                       : Expression::Neutral;
             break;
 
         case EventKind::ToolsRollup:
             out.has_motion = false;
             out.led = LedColor::White;
+            out.expression = Expression::Neutral;
             break;
 
         case EventKind::MemoryWrite:
@@ -170,6 +185,7 @@ inline EmbodimentCommand map_event(const Event& ev, Character ch) noexcept {
             out.motion.head_y_deg = 35.0f;
             out.motion.duration_ms = prof.reaction_ms + 300;
             out.led = LedColor::White;
+            out.expression = Expression::Happy;
             break;
 
         case EventKind::Proximity:
@@ -178,20 +194,24 @@ inline EmbodimentCommand map_event(const Event& ev, Character ch) noexcept {
             out.motion.head_y_deg = 60.0f;
             out.motion.duration_ms = 700;
             out.led = prof.idle_color;
+            out.expression = Expression::Curious;
             break;
 
         case EventKind::Error:
             out.has_motion = false;
             out.led = LedColor::Red;
+            out.expression = Expression::Error;
             break;
 
         case EventKind::CharacterSet:
             out.has_motion = true;
             out.motion.head_y_deg = 35.0f;
             out.led = profile_for(ev.character).idle_color;
+            out.expression = Expression::Happy;
             break;
 
         case EventKind::Unknown:
+            out.expression = Expression::Neutral;
             break;
     }
 

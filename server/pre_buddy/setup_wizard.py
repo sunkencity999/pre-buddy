@@ -127,7 +127,7 @@ def run_setup(
     out.write("===========================\n\n")
 
     # ── step 1: pick the device ───────────────────────────────────────
-    out.write("Step 1/3: Pick your robot\n")
+    out.write("Step 1/4: Pick your robot\n")
     device = _pick_device(
         inp=inp, out=out, discover=discover, scan_timeout_s=scan_timeout_s
     )
@@ -138,8 +138,13 @@ def run_setup(
     else:
         out.write("  (no device selected — you can re-run setup later)\n\n")
 
-    # ── step 2: autostart ─────────────────────────────────────────────
-    out.write("Step 2/3: Launch at login?\n")
+    # ── step 2: character identity ────────────────────────────────────
+    out.write("Step 2/4: Pick a character\n")
+    cfg.character = _pick_character(inp, out, default=cfg.character or "sage")
+    out.write(f"  ✓ Character: {cfg.character}\n\n")
+
+    # ── step 3: autostart ─────────────────────────────────────────────
+    out.write("Step 3/4: Launch at login?\n")
     cfg.autostart = _prompt_yes_no(
         inp,
         out,
@@ -159,8 +164,8 @@ def run_setup(
         result = autostart.uninstall(**overrides)
         out.write(f"  (skipped — {result.note})\n")
 
-    # ── step 3: save ──────────────────────────────────────────────────
-    out.write("\nStep 3/3: Save configuration\n")
+    # ── step 4: save ──────────────────────────────────────────────────
+    out.write("\nStep 4/4: Save configuration\n")
     written = config.save(cfg, target)
     out.write(f"  ✓ Wrote {written}\n\n")
 
@@ -232,6 +237,38 @@ def _prompt_manual_device(inp: TextIO, out: TextIO) -> Optional[DiscoveredDevice
 
 
 # ── step 2 helpers ────────────────────────────────────────────────────
+
+
+VALID_CHARACTERS: tuple[str, ...] = ("sage", "sprout", "sentinel")
+
+# Short blurbs surfaced during setup. Stays here (not in character.py)
+# because it's a UX string set, not part of the protocol contract.
+_CHARACTER_BLURBS: dict[str, str] = {
+    "sage": "calm, deliberate, blue idle. Slower reactions, longer blinks.",
+    "sprout": "curious, snappy, green idle. Quick reactions, frequent blinks.",
+    "sentinel": "watchful, steady, white idle. Returns to centre between tasks.",
+}
+
+
+def _pick_character(inp: TextIO, out: TextIO, *, default: str) -> str:
+    out.write("  Which identity should the robot wear?\n")
+    for idx, name in enumerate(VALID_CHARACTERS, start=1):
+        marker = " (current)" if name == default else ""
+        out.write(f"    [{idx}] {name:<9s} — {_CHARACTER_BLURBS[name]}{marker}\n")
+
+    while True:
+        out.write(f"  Pick a character [1-{len(VALID_CHARACTERS)}] (default {default}): ")
+        out.flush()
+        raw = inp.readline().strip().lower()
+        if not raw:
+            return default
+        if raw in VALID_CHARACTERS:
+            return raw
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(VALID_CHARACTERS):
+                return VALID_CHARACTERS[idx - 1]
+        out.write(f"  '{raw}' isn't valid — pick a number or one of {VALID_CHARACTERS}.\n")
 
 
 def _prompt_yes_no(inp: TextIO, out: TextIO, message: str, *, default_yes: bool) -> bool:

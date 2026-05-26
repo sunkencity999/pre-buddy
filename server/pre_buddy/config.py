@@ -74,6 +74,12 @@ class Config:
     device_name: Optional[str] = None
     """Fallback: advertising name. The transport will scan + match."""
 
+    character: str = "sage"
+    """Which character identity (sage|sprout|sentinel) to render on the
+    device. Persisted here so the tray app and setup wizard agree, and
+    so the chosen identity survives device power-cycles by being re-sent
+    via pre.character.set when the tray connects."""
+
     autostart: bool = False
     """User's "launch at login" choice. The actual installation is done
     by autostart.py; this field just records the intent."""

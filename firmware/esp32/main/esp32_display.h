@@ -18,6 +18,7 @@ class Esp32DisplayDriver : public hal::IDisplayDriver {
     void init() noexcept;
 
     void show_character(Character ch) noexcept override;
+    void show_expression(Character ch, Expression expr) noexcept override;
     void show_banner(std::string_view text) noexcept override;
     void show_passkey(unsigned int code) noexcept override;
     void clear() noexcept override;

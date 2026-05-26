@@ -22,7 +22,10 @@
         <div class="robot-shadow"></div>
         <div class="robot-head" id="robot-head">
           <div class="robot-led" id="robot-led" aria-hidden="true"></div>
-          <div class="robot-face">
+          <svg class="robot-face" id="robot-face" viewBox="0 0 100 80" aria-hidden="true">
+            <!-- Eyes + brows + mouth are redrawn per (character, expression) by viewer.js. -->
+          </svg>
+          <div class="robot-face-fallback" hidden>
             <div class="eye left"></div>
             <div class="eye right"></div>
             <div class="mouth"></div>
@@ -34,6 +37,7 @@
         <div class="readout-row"><span class="label">event</span> <span id="rd-event">—</span></div>
         <div class="readout-row"><span class="label">note</span> <span id="rd-note">—</span></div>
         <div class="readout-row"><span class="label">led</span> <span id="rd-led" class="led-chip">—</span></div>
+        <div class="readout-row"><span class="label">face</span> <span id="rd-face">—</span></div>
         <div class="readout-row"><span class="label">head</span> <span id="rd-head">x=0° y=45°</span></div>
         <div class="readout-row"><span class="label">duration</span> <span id="rd-duration">—</span></div>
       </div>

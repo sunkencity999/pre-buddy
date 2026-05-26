@@ -169,6 +169,40 @@ PRE_TEST(robot_loop_reset_to_idle_drives_safe_state) {
     PRE_CHECK(rig.display.character_calls[0] == Character::Sprout);
 }
 
+PRE_TEST(robot_loop_drives_display_show_expression_on_every_dispatch) {
+    Rig rig(Character::Sage);
+    Event happy;
+    happy.kind = EventKind::MemoryWrite;
+    Event err;
+    err.kind = EventKind::Error;
+
+    rig.loop.dispatch(happy);
+    rig.loop.dispatch(err);
+
+    PRE_CHECK_EQ(rig.display.expression_calls.size(), 2u);
+    PRE_CHECK(rig.display.expression_calls[0].first == Character::Sage);
+    PRE_CHECK(rig.display.expression_calls[0].second == Expression::Happy);
+    PRE_CHECK(rig.display.expression_calls[1].first == Character::Sage);
+    PRE_CHECK(rig.display.expression_calls[1].second == Expression::Error);
+}
+
+PRE_TEST(robot_loop_character_set_dispatches_expression_with_new_character) {
+    // The CharacterSet handler must switch the stored Character BEFORE
+    // emitting the expression call, so the face on screen matches the
+    // new identity, not the old one.
+    Rig rig(Character::Sage);
+    Event ev;
+    ev.kind = EventKind::CharacterSet;
+    ev.character = Character::Sentinel;
+
+    rig.loop.dispatch(ev);
+
+    PRE_CHECK(rig.loop.character() == Character::Sentinel);
+    PRE_CHECK_EQ(rig.display.expression_calls.size(), 1u);
+    PRE_CHECK(rig.display.expression_calls[0].first == Character::Sentinel);
+    PRE_CHECK(rig.display.expression_calls[0].second == Expression::Happy);
+}
+
 PRE_TEST(robot_loop_unknown_event_is_safe_idle_led) {
     Rig rig(Character::Sage);
     Event ev;

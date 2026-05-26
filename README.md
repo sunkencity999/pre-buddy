@@ -86,6 +86,8 @@ One firmware architecture, two physical forms.
 pre-buddy/
 ├── DESIGN.md                         Product and architecture spec
 ├── docs/
+│   ├── README.md                     Docs index
+│   ├── tutorial.md                   End-to-end pre-hardware tutorial
 │   ├── protocol.md                   Protocol implementation notes
 │   ├── embodiment.md                 Motion/LED behavior notes
 │   └── pairing.md                    Pairing flow notes
@@ -199,6 +201,10 @@ If snapshots fail unexpectedly, you changed behavior mapping. Either fix it, or 
 For a step-by-step pre-hardware walkthrough with command sequences, see:
 
 - [docs/tutorial.md](./docs/tutorial.md)
+
+For the full internal docs map, see:
+
+- [docs/README.md](./docs/README.md)
 
 ---
 

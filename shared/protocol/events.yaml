@@ -1,0 +1,32 @@
+# PRE Buddy canonical event list for code generation.
+# Keep in sync with shared/protocol/events.md.
+
+version: v1
+
+events:
+  - name: pre.system.wake_word
+    direction: bidirectional
+  - name: pre.bg_agents.change
+    direction: server_to_device
+  - name: pre.router.decision
+    direction: server_to_device
+  - name: pre.confidence.warning
+    direction: server_to_device
+  - name: pre.confidence.snapshot
+    direction: server_to_device
+  - name: pre.kg.delta
+    direction: server_to_device
+  - name: pre.training.progress
+    direction: server_to_device
+  - name: pre.scheduler.upcoming
+    direction: server_to_device
+  - name: pre.tools.rollup
+    direction: server_to_device
+  - name: pre.system.memory_write
+    direction: server_to_device
+  - name: pre.system.proximity
+    direction: bidirectional
+  - name: pre.system.error
+    direction: bidirectional
+  - name: pre.character.set
+    direction: bidirectional

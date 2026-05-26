@@ -1,6 +1,7 @@
 # Protocol
 
-Canonical spec: [`../shared/protocol/events.md`](../shared/protocol/events.md).
+Canonical spec docs: [`../shared/protocol/events.md`](../shared/protocol/events.md).
+Generated schema source: [`../shared/protocol/events.yaml`](../shared/protocol/events.yaml).
 
 This page explains implementation intent and where to edit code when adding an
 event.
@@ -13,10 +14,11 @@ event.
 - **Firmware tests:** `firmware/test/test_protocol.cpp`
 
 When introducing a new event:
-1. Update `shared/protocol/events.md`
-2. Add/update typed payload in Python
-3. Add/update C++ event parsing + embodiment mapping
-4. Add tests on both sides in the same commit
+1. Update `shared/protocol/events.md` and `shared/protocol/events.yaml`
+2. Run `python3 tools/generate_protocol_stubs.py`
+3. Add/update typed payload in Python
+4. Add/update C++ event parsing + embodiment mapping
+5. Add tests on both sides in the same commit
 
 ## v1 implemented events
 

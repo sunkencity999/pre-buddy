@@ -20,6 +20,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install pytest
         run: python -m pip install --upgrade pip pytest
+      - name: Check generated protocol stubs are current
+        run: python tools/generate_protocol_stubs.py --check
       - name: Run server tests
         working-directory: server
         run: pytest -q

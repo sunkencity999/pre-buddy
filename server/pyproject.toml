@@ -19,6 +19,10 @@ dev = ["pytest>=7"]
 transport = ["bleak>=0.21"]
 # Bridge subscriber (Slice 1). Lets the bridge connect to PRE's live WS.
 bridge = ["websockets>=12"]
+# System tray app (Slice 4). pystray is the cross-platform tray library;
+# Pillow loads the bundled icon. Both are optional so headless installs
+# (e.g. CI workers, server bots) stay slim.
+tray = ["pystray>=0.19", "Pillow>=10.0"]
 
 [project.scripts]
 pre-buddy = "pre_buddy.cli:main"
@@ -26,6 +30,11 @@ pre-buddy = "pre_buddy.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pre_buddy*"]
+
+[tool.setuptools.package-data]
+# Ship the tray icon PNG with the wheel so `pre-buddy tray` works after
+# a plain `pip install pre_buddy[tray]`.
+pre_buddy = ["assets/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

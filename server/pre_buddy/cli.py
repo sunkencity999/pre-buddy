@@ -31,7 +31,9 @@ from .events import (
     TrainingProgressData,
     WakeWordData,
 )
+from . import autostart, config as _config
 from .bridge import PreBridge
+from .setup_wizard import discover_via_bleak, run_setup
 from .simulate import (
     build_timeline_rows,
     render_rows_csv,
@@ -198,6 +200,45 @@ def _cmd_bridge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_setup(args: argparse.Namespace) -> int:
+    # Non-interactive path used by scripts/CI: --device-address X
+    # (optionally --device-name) + --autostart on|off + --yes skips
+    # every prompt by passing answers through.
+    if args.non_interactive:
+        cfg = _config.load()
+        if args.device_address:
+            cfg.device_address = args.device_address
+        if args.device_name:
+            cfg.device_name = args.device_name
+        cfg.autostart = args.autostart == "on"
+        path = _config.save(cfg)
+        if cfg.autostart:
+            autostart.install()
+        else:
+            autostart.uninstall()
+        print(f"wrote {path}")
+        return 0
+
+    # Interactive flow.
+    discover = None if args.no_scan else discover_via_bleak
+    run_setup(
+        inp=sys.stdin,
+        out=sys.stdout,
+        discover=discover,
+        scan_timeout_s=args.scan_timeout,
+    )
+    return 0
+
+
+def _cmd_tray(args: argparse.Namespace) -> int:
+    try:
+        from .tray import run_tray
+    except ImportError as exc:
+        print(f"tray: {exc}", file=sys.stderr)
+        return 2
+    return run_tray(args)
+
+
 def _cmd_viewer(args: argparse.Namespace) -> int:
     from .viewer import default_viewer_dir, serve
 
@@ -294,6 +335,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bridge.add_argument("--summary", action="store_true", default=True, help="print stats to stderr")
     bridge.set_defaults(func=_cmd_bridge)
+
+    setup = sub.add_parser("setup", help="first-time PRE Buddy setup (scan BLE, pick device, autostart)")
+    setup.add_argument("--no-scan", action="store_true", help="skip BLE scan, enter address manually")
+    setup.add_argument("--scan-timeout", type=float, default=5.0)
+    setup.add_argument("--non-interactive", action="store_true", help="use the flags below instead of prompting")
+    setup.add_argument("--device-address", default=None)
+    setup.add_argument("--device-name", default=None)
+    setup.add_argument("--autostart", choices=["on", "off"], default="off")
+    setup.set_defaults(func=_cmd_setup)
+
+    tray = sub.add_parser("tray", help="run the system tray app")
+    tray.add_argument("--once", action="store_true", help="boot the tray once and exit (smoke test)")
+    tray.set_defaults(func=_cmd_tray)
 
     viewer = sub.add_parser("viewer", help="serve the browser-based scenario viewer")
     viewer.add_argument("--host", default="127.0.0.1")

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PRE Buddy Setup
+Comment=First-time setup: scan BLE, pick a robot, choose autostart
+Exec=sh -c 'pre-buddy setup || python3 -m pre_buddy.cli setup'
+Terminal=true
+Categories=Utility;
+StartupNotify=false

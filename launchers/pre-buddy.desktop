@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PRE Buddy
+Comment=Run the PRE Buddy system tray (Connect / Disconnect / Open Viewer)
+Exec=sh -c 'pre-buddy tray || python3 -m pre_buddy.cli tray'
+Terminal=false
+Categories=Utility;
+StartupNotify=false

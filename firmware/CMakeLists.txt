@@ -21,6 +21,8 @@ add_executable(pre_buddy_host_tests
   test/test_character.cpp
   test/test_motion.cpp
   test/test_protocol.cpp
+  test/test_hal_mock.cpp
+  test/test_robot_loop.cpp
 )
 target_link_libraries(pre_buddy_host_tests PRIVATE pre_buddy_core)
 target_include_directories(pre_buddy_host_tests

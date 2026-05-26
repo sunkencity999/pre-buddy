@@ -40,6 +40,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Simulation artifacts
+server/examples/output/
+
 # Secrets
 .env
 .env.local

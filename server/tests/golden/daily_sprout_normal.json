@@ -1,0 +1,74 @@
+[
+  {
+    "character": "sprout",
+    "duration_ms": 350,
+    "has_motion": true,
+    "head_x_deg": -35.0,
+    "head_y_deg": 45.0,
+    "led": "yellow",
+    "note": "turn_toward_mic",
+    "scenario_index": 1,
+    "severity": "normal",
+    "source_event": "pre.system.wake_word"
+  },
+  {
+    "character": "sprout",
+    "duration_ms": 350,
+    "has_motion": false,
+    "head_x_deg": 0.0,
+    "head_y_deg": 45.0,
+    "led": "green",
+    "note": "agent_tier_pulse",
+    "scenario_index": 2,
+    "severity": "normal",
+    "source_event": "pre.bg_agents.change"
+  },
+  {
+    "character": "sprout",
+    "duration_ms": 550,
+    "has_motion": true,
+    "head_x_deg": 0.0,
+    "head_y_deg": 38.0,
+    "led": "purple",
+    "note": "router_escalation_nod",
+    "scenario_index": 3,
+    "severity": "normal",
+    "source_event": "pre.router.decision"
+  },
+  {
+    "character": "sprout",
+    "duration_ms": 350,
+    "has_motion": false,
+    "head_x_deg": 0.0,
+    "head_y_deg": 45.0,
+    "led": "cyan",
+    "note": "kg_update",
+    "scenario_index": 4,
+    "severity": "normal",
+    "source_event": "pre.kg.delta"
+  },
+  {
+    "character": "sprout",
+    "duration_ms": 350,
+    "has_motion": false,
+    "head_x_deg": 0.0,
+    "head_y_deg": 45.0,
+    "led": "white",
+    "note": "tools_rollup",
+    "scenario_index": 5,
+    "severity": "normal",
+    "source_event": "pre.tools.rollup"
+  },
+  {
+    "character": "sprout",
+    "duration_ms": 700,
+    "has_motion": true,
+    "head_x_deg": 0.0,
+    "head_y_deg": 60.0,
+    "led": "green",
+    "note": "look_up",
+    "scenario_index": 6,
+    "severity": "normal",
+    "source_event": "pre.system.proximity"
+  }
+]

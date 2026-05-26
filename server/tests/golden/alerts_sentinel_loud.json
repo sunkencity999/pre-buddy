@@ -1,0 +1,50 @@
+[
+  {
+    "character": "sentinel",
+    "duration_ms": 575,
+    "has_motion": true,
+    "head_x_deg": 0.0,
+    "head_y_deg": 30.0,
+    "led": "amber",
+    "note": "confidence_tilt",
+    "scenario_index": 1,
+    "severity": "loud",
+    "source_event": "pre.confidence.warning"
+  },
+  {
+    "character": "sentinel",
+    "duration_ms": 500,
+    "has_motion": false,
+    "head_x_deg": 0.0,
+    "head_y_deg": 45.0,
+    "led": "amber",
+    "note": "schedule_reminder",
+    "scenario_index": 2,
+    "severity": "loud",
+    "source_event": "pre.scheduler.upcoming"
+  },
+  {
+    "character": "sentinel",
+    "duration_ms": 500,
+    "has_motion": false,
+    "head_x_deg": 0.0,
+    "head_y_deg": 45.0,
+    "led": "red",
+    "note": "error_still",
+    "scenario_index": 3,
+    "severity": "loud",
+    "source_event": "pre.system.error"
+  },
+  {
+    "character": "sentinel",
+    "duration_ms": 919,
+    "has_motion": true,
+    "head_x_deg": 0.0,
+    "head_y_deg": 35.0,
+    "led": "white",
+    "note": "memory_nod",
+    "scenario_index": 4,
+    "severity": "loud",
+    "source_event": "pre.system.memory_write"
+  }
+]

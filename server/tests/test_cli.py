@@ -110,4 +110,26 @@ def test_simulate_replays_scenario_and_prints_summary(tmp_path):
     assert lines[0].startswith("[01] pre.system.wake_word")
     assert "led=yellow" in lines[0]
     assert "led=red" in lines[1]
-    assert lines[-1] == "simulated=2 character=sprout"
+    assert lines[-1] == "simulated=2 character=sprout severity=normal"
+
+
+def test_simulate_csv_output(tmp_path):
+    playback = tmp_path / "scenario.jsonl"
+    playback.write_text(
+        '{"event":"pre.system.error","data":{"code":"E1","message":"boom"}}\n',
+        encoding="utf-8",
+    )
+
+    rc, out = _run([
+        "simulate",
+        "--playback",
+        str(playback),
+        "--character",
+        "sage",
+        "--format",
+        "csv",
+    ])
+    assert rc == 0
+    lines = [line for line in out.splitlines() if line.strip()]
+    assert lines[0].startswith("scenario_index,source_event,led")
+    assert "pre.system.error" in lines[1]

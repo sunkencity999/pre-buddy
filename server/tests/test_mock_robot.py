@@ -53,3 +53,18 @@ def test_confidence_warning_and_proximity_have_distinct_postures():
     p = simulate_event(prox, Character.SAGE)
     assert p.has_motion
     assert p.head_y_deg > 45
+
+
+def test_severity_profile_changes_behavior():
+    warn = Event(
+        EventKind.CONFIDENCE_WARNING,
+        ConfidenceWarningData(domain="network", confidence=0.4, threshold=0.6),
+    )
+    quiet = simulate_event(warn, Character.SAGE, severity="quiet")
+    normal = simulate_event(warn, Character.SAGE, severity="normal")
+    loud = simulate_event(warn, Character.SAGE, severity="loud")
+
+    assert not quiet.has_motion
+    assert normal.has_motion
+    assert loud.has_motion
+    assert loud.duration_ms > normal.duration_ms

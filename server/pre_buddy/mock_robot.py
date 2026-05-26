@@ -54,14 +54,22 @@ def _tier_led(tier: Tier) -> str:
     return "purple"
 
 
-def simulate_event(event: Event, character: Character) -> SimResponse:
-    """Return likely robot behavior for one event and character profile."""
+def simulate_event(event: Event, character: Character, *, severity: str = "normal") -> SimResponse:
+    """Return likely robot behavior for one event and character profile.
+
+    severity: quiet|normal|loud
+    - quiet reduces non-critical motion to keep the device calm
+    - loud increases expressiveness for alert-heavy contexts
+    """
     led = _idle_led(character)
     has_motion = False
     x = 0.0
     y = 45.0
     duration = _reaction_ms(character)
     note = "idle"
+
+    if severity not in {"quiet", "normal", "loud"}:
+        raise ValueError(f"invalid severity: {severity}")
 
     if event.kind is EventKind.WAKE_WORD:
         has_motion = True
@@ -70,6 +78,8 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
             x = -35.0
         elif mic == "right":
             x = 35.0
+        if severity == "loud":
+            x = x * 1.2
         if character is Character.SPROUT:
             led = "yellow"
         note = "turn_toward_mic"
@@ -84,6 +94,8 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
             has_motion = True
             y = 38.0
             duration += 200
+            if severity == "loud":
+                y = 34.0
             note = "router_escalation_nod"
         else:
             note = "router_led_only"
@@ -92,6 +104,9 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
         has_motion = True
         y = 30.0
         led = "amber"
+        if severity == "quiet":
+            has_motion = False
+            y = 45.0
         note = "confidence_tilt"
 
     elif event.kind is EventKind.CONFIDENCE_SNAPSHOT:
@@ -109,6 +124,8 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
 
     elif event.kind is EventKind.SCHEDULER_UPCOMING:
         led = "amber" if event.data.minutes_until <= 120 else "blue"
+        if severity == "quiet" and event.data.minutes_until > 30:
+            led = _idle_led(character)
         note = "schedule_reminder"
 
     elif event.kind is EventKind.TOOLS_ROLLUP:
@@ -119,6 +136,9 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
         has_motion = True
         y = 35.0
         duration += 300
+        if severity == "quiet":
+            has_motion = False
+            y = 45.0
         led = "white"
         note = "memory_nod"
 
@@ -126,6 +146,8 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
         has_motion = True
         y = 60.0
         duration = 700
+        if severity == "loud":
+            duration = 550
         note = "look_up"
 
     elif event.kind is EventKind.ERROR:
@@ -137,6 +159,12 @@ def simulate_event(event: Event, character: Character) -> SimResponse:
         y = 35.0
         led = _idle_led(event.data.character)
         note = "character_ack"
+
+    # Global expressiveness scaling.
+    if severity == "quiet" and has_motion:
+        duration = int(duration * 0.9)
+    elif severity == "loud" and has_motion:
+        duration = int(duration * 1.15)
 
     return SimResponse(
         event=event.kind.value,

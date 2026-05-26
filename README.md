@@ -21,10 +21,37 @@ See [DESIGN.md](DESIGN.md) for the full design document.
 pre-buddy/
 ├── DESIGN.md                  Design document (read this first)
 ├── server/                    Python `pre buddy serve` subcommand
-├── firmware/                  C++ ESP32-S3 firmware (host-testable core)
-├── shared/                    Protocol spec (single source of truth)
-└── docs/                      Protocol, embodiment, pairing specs
+│   ├── pre_buddy/             package (events, serializer, cli)
+│   └── tests/                 pytest suite
+├── firmware/                  C++ ESP32-S3 firmware
+│   ├── core/include/pre_buddy host-testable headers (character, motion, protocol)
+│   ├── test/                  host unit tests (cmake + ctest)
+│   └── CMakeLists.txt
+├── shared/protocol/           wire-protocol spec (single source of truth)
+└── docs/                      protocol, embodiment, pairing notes
 ```
+
+## Build & Test
+
+Firmware host-testable core (no device required):
+
+```bash
+cd firmware
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Server:
+
+```bash
+cd server
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e '.[dev]'
+pytest -q
+```
+
+CI runs both suites on every push (`.github/workflows/ci.yml`).
 
 ## License
 

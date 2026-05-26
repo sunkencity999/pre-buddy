@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pre_buddy"
+version = "0.1.0"
+description = "PRE Buddy server — `pre buddy serve` subcommand (BLE NUS peripheral + pre.* event emitter)."
+readme = "../README.md"
+requires-python = ">=3.10"
+license = { text = "TBD" }
+authors = [{ name = "Christopher Bradford" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+pre-buddy = "pre_buddy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pre_buddy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

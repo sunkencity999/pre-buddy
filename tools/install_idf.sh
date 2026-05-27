@@ -56,17 +56,48 @@ export ESP_PYTHON
 log "using Python: $ESP_PYTHON ($($ESP_PYTHON --version))"
 
 # ── clone ESP-IDF ─────────────────────────────────────────────────────
+#
+# ESP-IDF + submodules is ~1.5 GB. The default git config can timeout on
+# slower / less stable networks while the server is still sending body
+# data. We bump postBuffer, force HTTP/2 to be off (some MITM proxies
+# choke on it), do a shallow clone, and retry on transient failure.
 
-if [[ -d "$IDF_PATH" ]]; then
+git_safe_clone() {
+    local attempts=0
+    local max_attempts=3
+    while (( attempts < max_attempts )); do
+        attempts=$((attempts + 1))
+        log "clone attempt $attempts/$max_attempts ..."
+        if git -c http.postBuffer=524288000 \
+               -c http.version=HTTP/1.1 \
+               -c http.lowSpeedLimit=1000 \
+               -c http.lowSpeedTime=600 \
+               clone --branch "$IDF_VERSION" \
+                     --depth 1 \
+                     --shallow-submodules \
+                     --recurse-submodules \
+                     https://github.com/espressif/esp-idf.git "$IDF_PATH"; then
+            return 0
+        fi
+        log "clone failed — cleaning up and retrying in 5s"
+        rm -rf "$IDF_PATH"
+        sleep 5
+    done
+    return 1
+}
+
+if [[ -d "$IDF_PATH" && -d "$IDF_PATH/.git" ]]; then
     log "ESP-IDF already at $IDF_PATH — fetching tags + checking out $IDF_VERSION"
-    git -C "$IDF_PATH" fetch --tags --recurse-submodules=on-demand
+    git -C "$IDF_PATH" fetch --tags
     git -C "$IDF_PATH" checkout "$IDF_VERSION"
-    git -C "$IDF_PATH" submodule update --init --recursive
+    git -C "$IDF_PATH" submodule update --init --recursive --depth 1
 else
-    log "cloning ESP-IDF $IDF_VERSION to $IDF_PATH"
+    log "cloning ESP-IDF $IDF_VERSION to $IDF_PATH (shallow, ~1.5 GB)"
     mkdir -p "$(dirname "$IDF_PATH")"
-    git clone --branch "$IDF_VERSION" --recursive \
-        https://github.com/espressif/esp-idf.git "$IDF_PATH"
+    rm -rf "$IDF_PATH"   # in case a previous partial clone left an empty dir
+    if ! git_safe_clone; then
+        fail "ESP-IDF clone failed after 3 attempts — check network / VPN / proxy"
+    fi
 fi
 
 # ── run Espressif's installer ─────────────────────────────────────────

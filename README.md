@@ -224,7 +224,7 @@ pre-buddy/
 │   │       ├── esp32_character_store.{h,cpp}
 │   │       ├── sprites/                   24 PNGs (generated)
 │   │       └── sprites_data.h             RGB565 atlas (generated)
-│   └── test/                              C++ host tests (120 cases)
+│   └── test/                              C++ host tests (107 cases)
 ├── viewer/                                Static browser scenario player
 │   ├── index.html
 │   ├── viewer.css
@@ -508,9 +508,9 @@ GitHub Actions (`.github/workflows/ci.yml`) runs:
 
 - Python tests (3.10/3.11/3.12) — **174 server tests**
 - generated-protocol drift check
-- C++ host build + ctest — **120 firmware tests**
+- C++ host build + ctest — **107 firmware tests**
 
-Total: **294 host tests, all green.**
+Total: **281 host tests, all green.**
 
 ---
 

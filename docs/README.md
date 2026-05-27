@@ -16,6 +16,8 @@ This directory contains implementation-focused documentation for PRE Buddy.
   - Motion budget, character behavior mapping, and safety constraints.
 - [`pairing.md`](./pairing.md)
   - Pairing UX and protocol notes (currently planning-stage).
+- [`hardware-bringup.md`](./hardware-bringup.md)
+  - Stage-by-stage playbook for wiring a real CoreS3 once one is on the bench.
 
 ## Protocol source of truth
 

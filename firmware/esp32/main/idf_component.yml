@@ -1,0 +1,22 @@
+# Managed component dependencies for the PRE Buddy ESP32 build.
+#
+# ESP-IDF v5.x ships only the core peripherals; vendor / first-party
+# extras are pulled via the IDF Component Manager. Each entry below
+# resolves against the public registry at https://components.espressif.com/.
+#
+# After editing this file, run:
+#     idf.py reconfigure
+# inside firmware/esp32/ to fetch the new dependencies.
+
+dependencies:
+  # idf builtin (declared explicitly so the manager versions cleanly
+  # against the installed IDF and reports a clear error if we ever bump
+  # past a major API change).
+  idf:
+    version: ">=5.3,<5.5"
+
+  # Espressif's speech-recognition stack: wakenet wake-word + AFE
+  # front-end + multinet command words. Required by esp32_wake_word.cpp.
+  # Pulls ~30 MB of pre-trained model assets at configure time.
+  espressif/esp-sr:
+    version: "^1.4.2"

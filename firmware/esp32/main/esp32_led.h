@@ -23,7 +23,7 @@ class Esp32LedDriver : public hal::ILedDriver {
 
    private:
     LedColor last_color_ = LedColor::Off;
-    unsigned char brightness_ = 64;
+    unsigned char brightness_ = 180;  // ring sits behind diffusers; needs to be bright
     bool initialised_ = false;
 };
 

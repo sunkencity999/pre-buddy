@@ -13,6 +13,8 @@
 #include <M5GFX.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "pre_buddy/led_palette.h"
 
 namespace pre_buddy::esp32 {
@@ -68,6 +70,28 @@ void led_refresh() {
     if (cfg < 0) cfg = kNumLeds;
     wr8(REG_LED_CFG, static_cast<uint8_t>(cfg | (1 << 6)));
 }
+// AW9523 GPIO expander (0x58) — gates the CoreS3 5V boost + bus that power
+// the body (LED strips + servos). Read-modify-write a single bit so we don't
+// disturb the LCD-reset bit M5GFX drives on the same chip.
+constexpr int kAw9523Addr = 0x58;
+void aw_set_bit(uint8_t reg, uint8_t bit, bool v) {
+    auto r = lgfx::i2c::readRegister8(s_port, kAw9523Addr, reg, kI2cFreq);
+    if (!r.has_value()) return;
+    const uint8_t cur = r.value();
+    const uint8_t nv = v ? static_cast<uint8_t>(cur | (1 << bit))
+                         : static_cast<uint8_t>(cur & ~(1 << bit));
+    lgfx::i2c::writeRegister8(s_port, kAw9523Addr, reg, nv, 0, kI2cFreq);
+}
+// Enable the CoreS3 5V boost (SY7088) + bus output so the body gets power.
+// M5GFX (display-only) skips this; M5Unified's M5.begin() does it.
+void enable_body_power() {
+    aw_set_bit(0x05, 7, false);  // P1_7 -> output (AW9523 config: 0 = output)
+    aw_set_bit(0x04, 1, false);  // P0_1 -> output
+    aw_set_bit(0x03, 7, true);   // P1_7 high = SY7088 BOOST_EN (5V boost on)
+    aw_set_bit(0x02, 1, true);   // P0_1 high = BUS_EN (5V to the body)
+    ESP_LOGI(TAG, "CoreS3 5V boost + bus enabled (AW9523 0x58)");
+}
+
 // The expander sits on the CoreS3 internal I2C bus M5GFX configured. Probe
 // both candidate ports and keep the one that answers with a valid version.
 bool detect_expander() {
@@ -90,6 +114,10 @@ void Esp32LedDriver::init() noexcept {
         ESP_LOGE(TAG, "PY32 IO expander not found — LEDs + servo power unavailable");
         return;
     }
+    // Power the body first: enable the CoreS3 5V boost + bus (the WS2812 strips
+    // and servos run on 5V), then let the rail settle before driving LEDs.
+    enable_body_power();
+    vTaskDelay(pdMS_TO_TICKS(100));
     // VM_EN (pin 0): output, pull-up, high → enable the servo power rail.
     set_bit(REG_GPIO_M_L, PIN_VM_EN, true);
     set_bit(REG_GPIO_PD_L, PIN_VM_EN, false);
@@ -101,10 +129,20 @@ void Esp32LedDriver::init() noexcept {
     set_bit(REG_GPIO_PU_H, PIN_RGB - 8, true);
     set_bit(REG_GPIO_DRV_H, PIN_RGB - 8, false);
     wr8(REG_LED_CFG, kNumLeds);
+    vTaskDelay(pdMS_TO_TICKS(200));  // let the expander's WS2812 engine come up (matches BSP)
 
     initialised_ = true;
-    off();  // start dark
-    ESP_LOGI(TAG, "LED ring (%d px) + servo power initialised", kNumLeds);
+    // BSP primes with two black frames before the first real colour; mirror
+    // that, then a full-white self-test flash (brightness-independent) to
+    // confirm the data path on the bench.
+    off();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    off();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    for (uint8_t i = 0; i < kNumLeds; ++i) led_color(i, Rgb888{255, 255, 255});
+    led_refresh();
+    vTaskDelay(pdMS_TO_TICKS(800));
+    ESP_LOGI(TAG, "LED + servo power initialised (self-test flash done)");
 }
 
 void Esp32LedDriver::set_color(LedColor color) noexcept {

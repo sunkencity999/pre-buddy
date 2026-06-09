@@ -25,6 +25,9 @@ class Esp32DisplayDriver : public hal::IDisplayDriver {
 
    private:
     bool initialised_ = false;
+    bool drawn_ = false;          // whether a sprite has been pushed yet
+    Character last_ch_{};         // last (ch, expr) drawn — skip redundant redraws
+    Expression last_expr_{};
 };
 
 }  // namespace pre_buddy::esp32

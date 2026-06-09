@@ -17,6 +17,7 @@ firmware/esp32/managed_components/
 firmware/esp32/sdkconfig
 firmware/esp32/sdkconfig.old
 firmware/esp32/dependencies.lock
+firmware/esp32/.cache/
 
 # Python
 __pycache__/

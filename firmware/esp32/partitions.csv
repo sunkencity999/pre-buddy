@@ -1,0 +1,8 @@
+# PRE Buddy partition table (M5Stack CoreS3, 16MB flash).
+# A single large app partition — the firmware carries ~370KB of sprite
+# RGB565 data plus M5GFX + NimBLE, which overflows the default 1MB factory
+# slot. 4MB leaves generous headroom (and room for OTA later).
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x6000
+phy_init,   data, phy,     0xf000,   0x1000
+factory,    app,  factory, 0x10000,  0x400000

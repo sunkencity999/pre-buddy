@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "pre_buddy/character.h"
 #include "pre_buddy/character_picker.h"
 #include "pre_buddy/character_store.h"

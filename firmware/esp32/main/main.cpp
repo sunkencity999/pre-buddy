@@ -19,6 +19,12 @@
 #include "pre_buddy/protocol.h"
 #include "pre_buddy/robot_loop.h"
 
+#include <cstdint>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+
 extern "C" {
 // ESP-IDF entry point.
 void app_main();
@@ -28,6 +34,8 @@ namespace pb = pre_buddy;
 namespace pb_esp = pre_buddy::esp32;
 
 namespace {
+
+constexpr const char* kTag = "pre-buddy";
 
 // TODO: feed `buf` into a real JSON parser (ArduinoJson or cJSON) and
 // translate it into a pb::Event. For now the function exists so the
@@ -79,11 +87,15 @@ void app_main() {
     pb::RobotLoop loop(outcome.character, servo, led, display);
     loop.reset_to_idle();
 
-    // Main pump. The ESP-IDF idle task scheduler keeps us cooperative if
-    // we yield ~every 10 ms. Real implementation will poll an event group
-    // signalled from the BLE RX callback so we don't busy-spin.
+    ESP_LOGI(kTag, "app_main: PRE Buddy stub booted; character=%d, idle face set",
+             static_cast<int>(outcome.character));
+
+    // Main pump. Yield ~every 10 ms so the IDLE task runs (and feeds the
+    // task watchdog) instead of busy-spinning a core. The real version
+    // will block on an event group signalled from the BLE RX callback.
     constexpr std::size_t kBufSize = 256;
     char buf[kBufSize];
+    std::uint32_t ticks = 0;
     while (true) {
         if (ble.has_incoming()) {
             std::size_t n = ble.pop_incoming(buf, kBufSize);
@@ -92,6 +104,9 @@ void app_main() {
                 loop.dispatch(ev);
             }
         }
-        // TODO: replace busy-wait with vTaskDelay once FreeRTOS headers are linked.
+        vTaskDelay(pdMS_TO_TICKS(10));
+        if (++ticks % 500 == 0) {  // heartbeat ~every 5 s
+            ESP_LOGI(kTag, "alive: uptime ~%us", static_cast<unsigned>(ticks / 100));
+        }
     }
 }

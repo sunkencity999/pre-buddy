@@ -1,44 +1,279 @@
 // SPDX-License-Identifier: TBD
-// ESP32-S3 IBleTransport — stub implementation.
+// ESP32-S3 IBleTransport — Nordic UART Service peripheral over NimBLE.
+//
+// Advertises the NUS service (UUIDs from pre_buddy/hal/uuids.h) under the
+// device name, accepts newline-framed JSON on the RX characteristic (fed
+// into LineFramer), and pushes lines back to the central via TX notify.
+//
+// The NimBLE host runs on its own task; the RobotLoop polls has_incoming()
+// / pop_incoming() from the main task. The shared LineFramer is guarded by
+// a spinlock since feed() (host task) and pop() (main task) race.
+
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/util/util.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+
+// NimBLE's C headers define min()/max() as function-like macros, which
+// clobber the C++ standard library's std::min/std::max templates the moment
+// a libstdc++ header is parsed (esp32_ble.h -> line_framer.h -> <array>).
+// Kill the macros before any C++ header below.
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+#include <cstring>
 
 #include "esp32_ble.h"
-
 #include "pre_buddy/hal/uuids.h"
 
 namespace pre_buddy::esp32 {
+namespace {
+
+constexpr const char* TAG = "pre-buddy-ble";
+
+Esp32BleTransport* g_instance = nullptr;
+portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
+
+uint16_t g_tx_val_handle = 0;
+volatile uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+volatile bool g_connected = false;
+uint8_t g_own_addr_type = 0;
+char g_device_name[32] = "pre-buddy";
+
+// NUS 128-bit UUIDs, little-endian byte order (reverse of the dashed string
+// form in uuids.h). 6E40000x-B5A3-F393-E0A9-E50E24DCCA9E.
+const ble_uuid128_t kSvcUuid = BLE_UUID128_INIT(
+    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
+    0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e);
+const ble_uuid128_t kRxUuid = BLE_UUID128_INIT(  // central -> peripheral (write)
+    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
+    0x93, 0xf3, 0xa3, 0xb5, 0x02, 0x00, 0x40, 0x6e);
+const ble_uuid128_t kTxUuid = BLE_UUID128_INIT(  // peripheral -> central (notify)
+    0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
+    0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e);
+
+void start_advertising();
+
+// RX: central wrote bytes. Feed every mbuf segment into the framer.
+int gatt_rx_cb(uint16_t conn_handle, uint16_t attr_handle,
+               struct ble_gatt_access_ctxt* ctxt, void* arg) {
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
+    if (g_instance == nullptr) return 0;
+    for (struct os_mbuf* om = ctxt->om; om != nullptr; om = SLIST_NEXT(om, om_next)) {
+        taskENTER_CRITICAL(&g_mux);
+        g_instance->framer().feed(reinterpret_cast<const uint8_t*>(om->om_data),
+                                  om->om_len);
+        taskEXIT_CRITICAL(&g_mux);
+    }
+    return 0;
+}
+
+// TX is notify-only; reads/writes shouldn't reach here, but NimBLE wants a cb.
+int gatt_tx_cb(uint16_t conn_handle, uint16_t attr_handle,
+               struct ble_gatt_access_ctxt* ctxt, void* arg) {
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)ctxt;
+    (void)arg;
+    return 0;
+}
+
+const struct ble_gatt_chr_def kNusChrs[] = {
+    {
+        .uuid = &kRxUuid.u,
+        .access_cb = gatt_rx_cb,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+    },
+    {
+        .uuid = &kTxUuid.u,
+        .access_cb = gatt_tx_cb,
+        .flags = BLE_GATT_CHR_F_NOTIFY,
+        .val_handle = &g_tx_val_handle,
+    },
+    {0},
+};
+
+const struct ble_gatt_svc_def kNusSvcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &kSvcUuid.u,
+        .characteristics = kNusChrs,
+    },
+    {0},
+};
+
+int gap_event(struct ble_gap_event* event, void* arg) {
+    (void)arg;
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            if (event->connect.status == 0) {
+                g_conn_handle = event->connect.conn_handle;
+                g_connected = true;
+                ESP_LOGI(TAG, "central connected (handle %d)", g_conn_handle);
+            } else {
+                ESP_LOGW(TAG, "connect failed (status %d); re-advertising",
+                         event->connect.status);
+                start_advertising();
+            }
+            return 0;
+        case BLE_GAP_EVENT_DISCONNECT:
+            ESP_LOGI(TAG, "central disconnected (reason %d); re-advertising",
+                     event->disconnect.reason);
+            g_connected = false;
+            g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            start_advertising();
+            return 0;
+        case BLE_GAP_EVENT_ADV_COMPLETE:
+            start_advertising();
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+void start_advertising() {
+    struct ble_gap_adv_params adv_params;
+    std::memset(&adv_params, 0, sizeof(adv_params));
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+
+    // Advertising packet: flags + complete name (the 128-bit UUID is 16B and
+    // won't co-fit with the name in 31 bytes, so it goes in the scan rsp).
+    struct ble_hs_adv_fields fields;
+    std::memset(&fields, 0, sizeof(fields));
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.name = reinterpret_cast<uint8_t*>(g_device_name);
+    fields.name_len = static_cast<uint8_t>(std::strlen(g_device_name));
+    fields.name_is_complete = 1;
+    fields.tx_pwr_lvl_is_present = 1;
+    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    int rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) ESP_LOGE(TAG, "adv_set_fields rc=%d", rc);
+
+    struct ble_hs_adv_fields rsp;
+    std::memset(&rsp, 0, sizeof(rsp));
+    rsp.uuids128 = const_cast<ble_uuid128_t*>(&kSvcUuid);
+    rsp.num_uuids128 = 1;
+    rsp.uuids128_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&rsp);
+    if (rc != 0) ESP_LOGE(TAG, "adv_rsp_set_fields rc=%d", rc);
+
+    rc = ble_gap_adv_start(g_own_addr_type, nullptr, BLE_HS_FOREVER, &adv_params,
+                           gap_event, nullptr);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv_start rc=%d", rc);
+    } else {
+        ESP_LOGI(TAG, "advertising as '%s'", g_device_name);
+    }
+}
+
+void on_sync() {
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) ESP_LOGE(TAG, "ensure_addr rc=%d", rc);
+    rc = ble_hs_id_infer_auto(0, &g_own_addr_type);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "infer_auto rc=%d", rc);
+        return;
+    }
+    start_advertising();
+}
+
+void on_reset(int reason) { ESP_LOGW(TAG, "nimble host reset; reason=%d", reason); }
+
+void host_task(void* param) {
+    (void)param;
+    nimble_port_run();  // returns only on nimble_port_stop()
+    nimble_port_freertos_deinit();
+}
+
+}  // namespace
 
 void Esp32BleTransport::start(std::string_view device_name) noexcept {
-    (void)device_name;
-    // TODO: nimble_port_init(), register NUS service with
-    // nus::SERVICE_UUID / RX_CHAR_UUID / TX_CHAR_UUID, start advertising.
+    g_instance = this;
+    if (!device_name.empty()) {
+        const std::size_t n = device_name.size() < sizeof(g_device_name) - 1
+                                  ? device_name.size()
+                                  : sizeof(g_device_name) - 1;
+        std::memcpy(g_device_name, device_name.data(), n);
+        g_device_name[n] = '\0';
+    }
+
+    esp_err_t err = nimble_port_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nimble_port_init failed: %d", err);
+        return;
+    }
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
+    int rc = ble_gatts_count_cfg(kNusSvcs);
+    if (rc != 0) { ESP_LOGE(TAG, "gatts_count_cfg rc=%d", rc); return; }
+    rc = ble_gatts_add_svcs(kNusSvcs);
+    if (rc != 0) { ESP_LOGE(TAG, "gatts_add_svcs rc=%d", rc); return; }
+
+    rc = ble_svc_gap_device_name_set(g_device_name);
+    if (rc != 0) ESP_LOGW(TAG, "device_name_set rc=%d", rc);
+
+    ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.reset_cb = on_reset;
+
+    nimble_port_freertos_init(host_task);
+    ESP_LOGI(TAG, "NimBLE NUS started; device name '%s'", g_device_name);
 }
 
 void Esp32BleTransport::stop() noexcept {
-    // TODO: nimble_port_stop().
+    if (g_connected) {
+        ble_gap_terminate(g_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    nimble_port_stop();
 }
 
-bool Esp32BleTransport::is_connected() const noexcept {
-    // TODO: track in a gap event callback.
-    return false;
-}
+bool Esp32BleTransport::is_connected() const noexcept { return g_connected; }
 
 bool Esp32BleTransport::has_incoming() const noexcept {
-    // framer_ is fed inside the RX callback (see TODO in start()).
-    return framer_.has_line();
+    taskENTER_CRITICAL(&g_mux);
+    const bool ready = framer_.has_line();
+    taskEXIT_CRITICAL(&g_mux);
+    return ready;
 }
 
 std::size_t Esp32BleTransport::pop_incoming(char* out_buf, std::size_t max_len) noexcept {
-    if (!framer_.has_line()) return 0;
+    taskENTER_CRITICAL(&g_mux);
+    if (!framer_.has_line()) {
+        taskEXIT_CRITICAL(&g_mux);
+        return 0;
+    }
     const auto line = framer_.pop_line();
     const auto n = (line.size() < max_len) ? line.size() : max_len;
     std::memcpy(out_buf, line.data(), n);
+    taskEXIT_CRITICAL(&g_mux);
     return n;
 }
 
 bool Esp32BleTransport::send_line(std::string_view line) noexcept {
-    (void)line;
-    // TODO: ble_gatts_notify_custom on the TX characteristic handle.
-    return false;
+    if (!g_connected || g_tx_val_handle == 0) return false;
+    // Append '\n' so the central's line framer sees a complete line.
+    char buf[520];
+    const std::size_t n = line.size() < sizeof(buf) - 1 ? line.size() : sizeof(buf) - 1;
+    std::memcpy(buf, line.data(), n);
+    buf[n] = '\n';
+    struct os_mbuf* om = ble_hs_mbuf_from_flat(buf, n + 1);
+    if (om == nullptr) return false;
+    return ble_gatts_notify_custom(g_conn_handle, g_tx_val_handle, om) == 0;
 }
 
 }  // namespace pre_buddy::esp32

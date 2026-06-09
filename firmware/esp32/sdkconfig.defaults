@@ -1,0 +1,31 @@
+# PRE Buddy ESP32-S3 (M5Stack CoreS3) project defaults.
+#
+# These are applied on `idf.py set-target` / fresh configure so the board
+# config is reproducible (sdkconfig itself is generated + gitignored).
+
+# Target board: M5Stack CoreS3 = ESP32-S3.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Route the ESP-IDF console (boot log, esp_log output, panic backtraces)
+# to the built-in USB-Serial/JTAG. The CoreS3 exposes only USB-C with no
+# UART bridge pins broken out, so UART0 console output is invisible — and
+# USB-Serial/JTAG is the same port we flash and monitor over.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# CoreS3 has 16MB flash. Use a custom partition table with a 4MB app slot —
+# the default 1MB factory partition can't hold the sprite atlas + M5GFX +
+# NimBLE.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Bluetooth: NimBLE host (for the Nordic UART Service in esp32_ble.cpp).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# M5GFX/LovyanGFX autodetect + panel bring-up is very stack-hungry, and
+# app_main runs the whole HAL init (display, BLE framer, RobotLoop) on the
+# main task. The default 3584-byte main-task stack overflows during
+# g_gfx.init() (crash in i2c/intr_alloc on a garbage pointer). Give it room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

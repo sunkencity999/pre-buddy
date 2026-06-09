@@ -23,5 +23,9 @@ idf_component_register(
         driver      # LEDC for servo PWM
         esp_timer
         nvs_flash
-        esp-sr      # Espressif speech-recognition (wake word + AFE)
+        # esp-sr — TEMP: excluded for Stage 1 boot bring-up. main.cpp does
+        # not wire the mic/speaker/wake-word drivers yet, so esp-sr is unused
+        # and also demands a `model` flash partition we don't have. Restore
+        # this (plus a custom partitions.csv with a `model` partition) at
+        # Stage 2.5 when audio is implemented.
 )

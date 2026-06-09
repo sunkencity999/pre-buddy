@@ -82,6 +82,17 @@ void aw_set_bit(uint8_t reg, uint8_t bit, bool v) {
                          : static_cast<uint8_t>(cur & ~(1 << bit));
     lgfx::i2c::writeRegister8(s_port, kAw9523Addr, reg, nv, 0, kI2cFreq);
 }
+// AXP2101 PMU (0x34): power-key IRQ (reg 0x49 bits 2/3 = short/long press)
+// and power-off (reg 0x10 bit0).
+constexpr int kAxpAddr = 0x34;
+int axp_rd(uint8_t reg) {
+    auto r = lgfx::i2c::readRegister8(s_port, kAxpAddr, reg, kI2cFreq);
+    return r.has_value() ? r.value() : -1;
+}
+void axp_wr(uint8_t reg, uint8_t val) {
+    lgfx::i2c::writeRegister8(s_port, kAxpAddr, reg, val, 0, kI2cFreq);
+}
+
 // Enable the CoreS3 5V boost (SY7088) + bus output so the body gets power.
 // M5GFX (display-only) skips this; M5Unified's M5.begin() does it.
 void enable_body_power() {
@@ -123,6 +134,15 @@ void Esp32LedDriver::init() noexcept {
     // and servos run on 5V), then let the rail settle before driving LEDs.
     enable_body_power();
     vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Enable the AXP2101 power-key IRQ (reg 0x41 bits 2/3) so its press status
+    // latches in reg 0x49, and clear the stale power-on press so we don't
+    // shut down immediately.
+    {
+        const int en = axp_rd(0x41);
+        axp_wr(0x41, static_cast<uint8_t>((en < 0 ? 0 : en) | 0x0C));
+        axp_wr(0x49, 0x0C);
+    }
     // VM_EN (pin 0): output, pull-up, high → enable the servo power rail.
     set_bit(REG_GPIO_M_L, PIN_VM_EN, true);
     set_bit(REG_GPIO_PD_L, PIN_VM_EN, false);
@@ -167,6 +187,27 @@ void Esp32LedDriver::off() noexcept {
     if (!initialised_) return;
     for (uint8_t i = 0; i < kNumLeds; ++i) led_color(i, Rgb888{0, 0, 0});
     led_refresh();
+}
+
+bool Esp32LedDriver::poll_power_off_request() noexcept {
+    if (!initialised_) return false;
+    const int v = axp_rd(0x49);
+    if (v < 0) return false;
+    const uint8_t pk = static_cast<uint8_t>(v) & 0x0C;  // bits 2/3 = power-key press
+    if (pk) axp_wr(0x49, pk);                            // clear the IRQ bits
+    return pk != 0;  // any power-key press = power-off request (hold or tap)
+}
+
+void Esp32LedDriver::shutdown() noexcept {
+    if (!initialised_) return;
+    off();                              // blank the ring
+    set_bit(REG_GPIO_O_L, PIN_VM_EN, false);  // servo power off
+    aw_set_bit(0x03, 7, false);         // AW9523 BOOST_EN off
+    aw_set_bit(0x02, 1, false);         // AW9523 BUS_EN off
+    ESP_LOGI(TAG, "graceful shutdown — powering off");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    const int r = axp_rd(0x10);
+    axp_wr(0x10, static_cast<uint8_t>((r < 0 ? 0 : r) | 0x01));  // AXP2101 power off
 }
 
 }  // namespace pre_buddy::esp32

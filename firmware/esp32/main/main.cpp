@@ -172,7 +172,14 @@ void app_main() {
     // will block on an event group signalled from the BLE RX callback.
     constexpr std::size_t kBufSize = 256;
     char buf[kBufSize];
-    std::uint32_t ticks = 0;
+    std::uint32_t ticks = 0;            // 10 ms ticks
+    std::uint32_t idle_ticks = 0;       // ticks since the last event
+    bool idled = false;                 // have we relaxed to the idle pose?
+    std::uint32_t next_ambient = 0;     // idle_ticks at which to do the next glance
+    int ambient_dir = 1;
+    constexpr std::uint32_t kIdleReturn = 800;   // ~8 s of quiet → relax to neutral
+    constexpr std::uint32_t kAmbientGap = 1700;  // ~17 s between subtle glances
+
     while (true) {
         if (ble.has_incoming()) {
             std::size_t n = ble.pop_incoming(buf, kBufSize);
@@ -184,11 +191,42 @@ void app_main() {
                          static_cast<int>(cmd.expression),
                          static_cast<int>(cmd.has_motion),
                          static_cast<int>(cmd.led));
+                idle_ticks = 0;
+                idled = false;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));
-        if (++ticks % 500 == 0) {  // heartbeat ~every 5 s
+        ++ticks;
+        ++idle_ticks;
+
+        if (ticks % 500 == 0) {  // heartbeat ~every 5 s
             ESP_LOGI(kTag, "alive: uptime ~%us", static_cast<unsigned>(ticks / 100));
+        }
+
+        // Graceful shutdown: a power-key long-press blanks the LEDs, cuts the
+        // 5V boost + servo power, and powers the AXP2101 off. Poll ~every 200ms.
+        if (ticks % 20 == 0 && led.poll_power_off_request()) {
+            ESP_LOGI(kTag, "power-key long press → graceful shutdown");
+            servo.disable();
+            led.shutdown();
+        }
+
+        // After a quiet spell, relax everything to the calm idle pose.
+        if (!idled && idle_ticks >= kIdleReturn) {
+            loop.reset_to_idle();
+            idled = true;
+            next_ambient = idle_ticks + kAmbientGap;
+        }
+        // Subtle ambient "looking around": mostly still, a small head glance
+        // every ~17 s, alternating sides — the calm alive-but-idle loop.
+        if (idled && idle_ticks >= next_ambient) {
+            pb::MotionCommand m;
+            m.head_x_deg = static_cast<float>(ambient_dir) * 12.0f;
+            m.head_y_deg = 45.0f + (ambient_dir > 0 ? 3.0f : -3.0f);
+            m.duration_ms = 1500;
+            servo.move(m);
+            ambient_dir = -ambient_dir;
+            next_ambient = idle_ticks + kAmbientGap;
         }
     }
 }

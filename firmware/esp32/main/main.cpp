@@ -128,11 +128,12 @@ void app_main() {
     pb_esp::Esp32DisplayDriver display;
     pb_esp::Esp32BleTransport ble;
 
-    // Display first: M5GFX brings up the CoreS3 internal I2C bus that the
-    // LED/servo IO-expander shares, so the LED driver must init after it.
+    // Order matters: display brings up the shared internal I2C bus (M5GFX);
+    // led init enables the 5V boost + VM_EN that power the body; servo init
+    // then has power for torque-enable + its bring-up sweep.
     display.init();
-    servo.init();
     led.init();
+    servo.init();
 
     pb_esp::Esp32NvsCharacterStore store;
     store.init();

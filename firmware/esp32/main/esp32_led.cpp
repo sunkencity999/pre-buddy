@@ -92,16 +92,21 @@ void enable_body_power() {
     ESP_LOGI(TAG, "CoreS3 5V boost + bus enabled (AW9523 0x58)");
 }
 
-// The expander sits on the CoreS3 internal I2C bus M5GFX configured. Probe
-// both candidate ports and keep the one that answers with a valid version.
+// The expander sits on the CoreS3 internal I2C bus M5GFX configured. It boots
+// slowly (the BSP polls up to ~1.2s), so retry both candidate ports until one
+// answers with a valid version before giving up.
 bool detect_expander() {
-    for (int port : {1, 0}) {
-        s_port = port;
-        const int v = rd8(REG_VERSION);
-        if (v > 0 && v != 0xFF) {
-            ESP_LOGI(TAG, "PY32 expander on i2c port %d (version %d)", port, v);
-            return true;
+    for (int attempt = 0; attempt < 12; ++attempt) {  // ~1.8s budget
+        for (int port : {1, 0}) {
+            s_port = port;
+            const int v = rd8(REG_VERSION);
+            if (v > 0 && v != 0xFF) {
+                ESP_LOGI(TAG, "PY32 expander on i2c port %d (version %d, attempt %d)",
+                         port, v, attempt);
+                return true;
+            }
         }
+        vTaskDelay(pdMS_TO_TICKS(150));
     }
     s_port = -1;
     return false;

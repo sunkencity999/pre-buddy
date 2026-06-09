@@ -24,6 +24,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "cJSON.h"
+
+#include <cstring>
 
 extern "C" {
 // ESP-IDF entry point.
@@ -37,13 +40,84 @@ namespace {
 
 constexpr const char* kTag = "pre-buddy";
 
-// TODO: feed `buf` into a real JSON parser (ArduinoJson or cJSON) and
-// translate it into a pb::Event. For now the function exists so the
-// shape compiles and reviewers can see where the parser plugs in.
+pb::Event::Tier tier_from(const cJSON* data, const char* key) noexcept {
+    const cJSON* t = cJSON_GetObjectItemCaseSensitive(data, key);
+    if (cJSON_IsString(t) && t->valuestring != nullptr) {
+        if (std::strcmp(t->valuestring, "standard") == 0) return pb::Event::Tier::Standard;
+        if (std::strcmp(t->valuestring, "frontier") == 0) return pb::Event::Tier::Frontier;
+    }
+    return pb::Event::Tier::Fast;
+}
+
+// Parse one NUS JSON line ({"event": "...", "data": {...}}) into a pb::Event.
+// Unknown / malformed input yields EventKind::Unknown (RobotLoop idles).
 pb::Event decode_event_json(const char* buf, std::size_t n) noexcept {
-    (void)buf;
-    (void)n;
-    return pb::Event{};  // EventKind::Unknown → RobotLoop will idle.
+    pb::Event ev{};
+    cJSON* root = cJSON_ParseWithLength(buf, n);
+    if (root == nullptr) return ev;
+
+    const cJSON* type = cJSON_GetObjectItemCaseSensitive(root, "event");
+    if (cJSON_IsString(type) && type->valuestring != nullptr) {
+        ev.kind = pb::parse_event_kind(type->valuestring);
+    }
+
+    const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    if (cJSON_IsObject(data)) {
+        switch (ev.kind) {
+            case pb::EventKind::WakeWord: {
+                const cJSON* m = cJSON_GetObjectItemCaseSensitive(data, "source_mic");
+                if (cJSON_IsString(m) && m->valuestring != nullptr) {
+                    if (std::strcmp(m->valuestring, "left") == 0)
+                        ev.source_mic = pb::Event::Mic::Left;
+                    else if (std::strcmp(m->valuestring, "right") == 0)
+                        ev.source_mic = pb::Event::Mic::Right;
+                }
+                break;
+            }
+            case pb::EventKind::BgAgentChange:
+                ev.tier = tier_from(data, "tier");
+                break;
+            case pb::EventKind::RouterDecision:
+                ev.from_tier = tier_from(data, "from_tier");
+                ev.to_tier = tier_from(data, "to_tier");
+                break;
+            case pb::EventKind::ConfidenceWarning: {
+                const cJSON* c = cJSON_GetObjectItemCaseSensitive(data, "confidence");
+                const cJSON* t = cJSON_GetObjectItemCaseSensitive(data, "threshold");
+                if (cJSON_IsNumber(c)) ev.confidence = static_cast<float>(c->valuedouble);
+                if (cJSON_IsNumber(t)) ev.threshold = static_cast<float>(t->valuedouble);
+                break;
+            }
+            case pb::EventKind::ConfidenceSnapshot: {
+                const cJSON* c = cJSON_GetObjectItemCaseSensitive(data, "confidence");
+                if (cJSON_IsNumber(c)) ev.confidence = static_cast<float>(c->valuedouble);
+                break;
+            }
+            case pb::EventKind::SchedulerUpcoming: {
+                const cJSON* mu = cJSON_GetObjectItemCaseSensitive(data, "minutes_until");
+                if (cJSON_IsNumber(mu)) ev.minutes_until = static_cast<std::int32_t>(mu->valuedouble);
+                break;
+            }
+            case pb::EventKind::Proximity: {
+                const cJSON* d = cJSON_GetObjectItemCaseSensitive(data, "distance_cm");
+                if (cJSON_IsNumber(d)) ev.distance_cm = static_cast<float>(d->valuedouble);
+                break;
+            }
+            case pb::EventKind::CharacterSet: {
+                const cJSON* ch = cJSON_GetObjectItemCaseSensitive(data, "character");
+                if (cJSON_IsString(ch) && ch->valuestring != nullptr) {
+                    pb::Character parsed;
+                    if (pb::parse_character(ch->valuestring, parsed)) ev.character = parsed;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    cJSON_Delete(root);
+    return ev;
 }
 
 }  // namespace
@@ -101,7 +175,12 @@ void app_main() {
             std::size_t n = ble.pop_incoming(buf, kBufSize);
             if (n > 0) {
                 pb::Event ev = decode_event_json(buf, n);
-                loop.dispatch(ev);
+                const pb::EmbodimentCommand cmd = loop.dispatch(ev);
+                ESP_LOGI(kTag, "event kind=%d -> expr=%d motion=%d led=%d",
+                         static_cast<int>(ev.kind),
+                         static_cast<int>(cmd.expression),
+                         static_cast<int>(cmd.has_motion),
+                         static_cast<int>(cmd.led));
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));

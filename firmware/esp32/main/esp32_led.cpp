@@ -135,12 +135,13 @@ void Esp32LedDriver::init() noexcept {
     enable_body_power();
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // Enable the AXP2101 power-key IRQ so its press status latches in reg
-    // 0x49, and clear the stale power-on press so we don't shut down at boot.
-    // The enable lives in reg 0x42 = 0x03 (per M5Unified — NOT 0x41).
+    // Enable the AXP2101 power-key IRQ (enable reg 0x41 bits 2/3 — same index
+    // as the 0x49 status reg) so a press latches in 0x49, and clear the stale
+    // power-on press so we don't shut down at boot. (Reg 0x41 is correct per
+    // the AXP2101 IRQ map; an earlier 0x42 attempt broke detection.)
     {
-        const int en = axp_rd(0x42);
-        axp_wr(0x42, static_cast<uint8_t>((en < 0 ? 0 : en) | 0x03));
+        const int en = axp_rd(0x41);
+        axp_wr(0x41, static_cast<uint8_t>((en < 0 ? 0 : en) | 0x0C));
         axp_wr(0x49, 0x0C);
     }
     // VM_EN (pin 0): output, pull-up, high → enable the servo power rail.

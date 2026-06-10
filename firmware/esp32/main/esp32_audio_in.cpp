@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 #include "esp32_ble.h"  // Esp32BleTransport::send_line
@@ -14,17 +15,15 @@ namespace pre_buddy::esp32 {
 namespace {
 
 constexpr const char* TAG = "pre-buddy-audioin";
-constexpr std::size_t kMaxFrame = 512;        // matches mic kMaxFrame
-constexpr std::uint32_t kCaptureMs = 6000;    // fixed listen window per wake
-constexpr std::size_t kMsgBufBytes = 16384;   // ~10 frame lines of slack
-constexpr std::size_t kRxBufBytes = 1600;     // one line + length prefix
+constexpr std::uint32_t kSampleRate = 16000;
+constexpr std::uint32_t kCaptureMs = 6000;             // listen window per wake
+constexpr std::size_t kChunkSamples = 512;             // PCM samples per frame line
+constexpr std::size_t kCapSamples = kSampleRate * kCaptureMs / 1000;  // 96000
 
 const char kB64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-// Standard padded base64. dst must hold >= 4*((n+2)/3) bytes. Returns the
-// number of characters written. (Avoids an mbedtls component dependency for
-// what is a dozen lines of arithmetic.)
+// Standard padded base64. dst must hold >= 4*((n+2)/3) bytes.
 std::size_t b64_encode(char* dst, const unsigned char* src, std::size_t n) {
     std::size_t o = 0, i = 0;
     for (; i + 3 <= n; i += 3) {
@@ -63,56 +62,100 @@ void tx_trampoline(void* arg) {
 void Esp32AudioInStreamer::start(Esp32BleTransport* transport) noexcept {
     if (running_) return;
     transport_ = transport;
-    msgbuf_ = xMessageBufferCreate(kMsgBufBytes);
-    if (msgbuf_ == nullptr) {
-        ESP_LOGE(TAG, "message buffer alloc failed (%u B)", (unsigned)kMsgBufBytes);
+    cap_cap_ = kCapSamples;
+    cap_buf_ = static_cast<std::int16_t*>(
+        heap_caps_malloc(cap_cap_ * sizeof(std::int16_t), MALLOC_CAP_SPIRAM));
+    if (cap_buf_ == nullptr) {
+        ESP_LOGE(TAG, "capture buffer alloc failed (%u samples in PSRAM)",
+                 static_cast<unsigned>(cap_cap_));
+        return;
+    }
+    drain_sig_ = xSemaphoreCreateBinary();
+    if (drain_sig_ == nullptr) {
+        ESP_LOGE(TAG, "semaphore alloc failed");
+        heap_caps_free(cap_buf_);
+        cap_buf_ = nullptr;
         return;
     }
     running_ = true;
     xTaskCreate(tx_trampoline, "audiotx", 4096, this, 5, &tx_task_);
-    ESP_LOGI(TAG, "audio-in streamer started (window %u ms)", (unsigned)kCaptureMs);
+    ESP_LOGI(TAG, "audio-in streamer started (%u ms window, %u KB PSRAM)",
+             static_cast<unsigned>(kCaptureMs),
+             static_cast<unsigned>(cap_cap_ * sizeof(std::int16_t) / 1024));
 }
 
 void Esp32AudioInStreamer::stop() noexcept {
     if (!running_) return;
     running_ = false;
-    for (int i = 0; i < 30 && tx_task_ != nullptr; ++i) vTaskDelay(pdMS_TO_TICKS(10));
+    if (drain_sig_ != nullptr) xSemaphoreGive(drain_sig_);  // unblock tx task
+    for (int i = 0; i < 50 && tx_task_ != nullptr; ++i) vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+void Esp32AudioInStreamer::feed(const std::int16_t* samples,
+                                std::size_t n) noexcept {
+    if (!running_ || samples == nullptr || n == 0 || cap_buf_ == nullptr) return;
+
+    if (state_ == State::Idle) {
+        if (!request_) return;
+        request_ = false;
+        cap_len_ = 0;
+        start_tick_ = xTaskGetTickCount();
+        std::snprintf(sid_, sizeof(sid_), "buddy-%lu",
+                      static_cast<unsigned long>(++session_n_));
+        state_ = State::Capturing;
+        ESP_LOGI(TAG, "capture start (session %s)", sid_);
+    }
+
+    if (state_ == State::Capturing) {
+        const std::size_t room = cap_cap_ - cap_len_;
+        const std::size_t take = n < room ? n : room;
+        std::memcpy(cap_buf_ + cap_len_, samples, take * sizeof(std::int16_t));
+        cap_len_ += take;
+        const std::uint32_t elapsed =
+            (xTaskGetTickCount() - start_tick_) * portTICK_PERIOD_MS;
+        if (cap_len_ >= cap_cap_ || elapsed >= kCaptureMs) {
+            state_ = State::Sending;  // hand the buffer to the TX task
+            xSemaphoreGive(drain_sig_);
+            ESP_LOGI(TAG, "capture done (%u samples, %u ms) — draining",
+                     static_cast<unsigned>(cap_len_), static_cast<unsigned>(elapsed));
+        }
+    }
+    // State::Sending — TX task owns cap_buf_; drop frames until it's Idle again.
 }
 
 void Esp32AudioInStreamer::tx_loop() noexcept {
-    // Static (not stack) so the 4 KB task stack stays roomy for send_line.
-    static unsigned char rxbuf[kRxBufBytes];
     while (running_) {
-        const std::size_t len = xMessageBufferReceive(
-            msgbuf_, rxbuf, sizeof(rxbuf), pdMS_TO_TICKS(200));
-        if (len > 0 && transport_ != nullptr) {
-            transport_->send_line(
-                std::string_view(reinterpret_cast<char*>(rxbuf), len));
+        if (xSemaphoreTake(drain_sig_, pdMS_TO_TICKS(200)) != pdTRUE) continue;
+        if (!running_) break;
+
+        const std::size_t total = cap_len_;
+        seq_ = 0;
+        emit_start();
+        for (std::size_t off = 0; off < total && running_; off += kChunkSamples) {
+            std::size_t chunk = total - off;
+            if (chunk > kChunkSamples) chunk = kChunkSamples;
+            emit_frame(cap_buf_ + off, chunk);
         }
+        emit_stop("timeout");
+        ESP_LOGI(TAG, "drained %u frames (%u samples)",
+                 static_cast<unsigned>(seq_), static_cast<unsigned>(total));
+        state_ = State::Idle;  // allow the next capture to arm
     }
     tx_task_ = nullptr;
-}
-
-void Esp32AudioInStreamer::enqueue(const char* line, std::size_t len) noexcept {
-    if (msgbuf_ == nullptr || len == 0) return;
-    // 0 timeout: if the link can't keep up, drop the frame rather than block
-    // the mic task (which would drop real audio + starve the wake detector).
-    xMessageBufferSend(msgbuf_, line, len, 0);
 }
 
 void Esp32AudioInStreamer::emit_start() noexcept {
     const int k = std::snprintf(
         line_buf_, sizeof(line_buf_),
         "{\"event\":\"pre.audio.input_start\",\"data\":{\"session_id\":\"%s\","
-        "\"sample_rate_hz\":16000,\"codec\":\"pcm16\"}}",
-        sid_);
+        "\"sample_rate_hz\":%u,\"codec\":\"pcm16\"}}",
+        sid_, static_cast<unsigned>(kSampleRate));
     if (k > 0 && static_cast<std::size_t>(k) < sizeof(line_buf_))
-        enqueue(line_buf_, static_cast<std::size_t>(k));
+        transport_->send_line(std::string_view(line_buf_, static_cast<std::size_t>(k)));
 }
 
 void Esp32AudioInStreamer::emit_frame(const std::int16_t* samples,
                                       std::size_t n) noexcept {
-    if (n > kMaxFrame) n = kMaxFrame;
     const std::size_t olen = b64_encode(
         b64_, reinterpret_cast<const unsigned char*>(samples),
         n * sizeof(std::int16_t));
@@ -122,7 +165,7 @@ void Esp32AudioInStreamer::emit_frame(const std::int16_t* samples,
         "\"seq\":%u,\"data\":\"%.*s\"}}",
         sid_, static_cast<unsigned>(seq_), static_cast<int>(olen), b64_);
     if (k > 0 && static_cast<std::size_t>(k) < sizeof(line_buf_))
-        enqueue(line_buf_, static_cast<std::size_t>(k));
+        transport_->send_line(std::string_view(line_buf_, static_cast<std::size_t>(k)));
     ++seq_;
 }
 
@@ -133,36 +176,7 @@ void Esp32AudioInStreamer::emit_stop(const char* reason) noexcept {
         "\"reason\":\"%s\"}}",
         sid_, reason);
     if (k > 0 && static_cast<std::size_t>(k) < sizeof(line_buf_))
-        enqueue(line_buf_, static_cast<std::size_t>(k));
-}
-
-void Esp32AudioInStreamer::feed(const std::int16_t* samples,
-                                std::size_t n) noexcept {
-    if (!running_ || samples == nullptr || n == 0) return;
-
-    if (state_ == State::Idle) {
-        if (!request_) return;
-        request_ = false;
-        std::snprintf(sid_, sizeof(sid_), "buddy-%lu",
-                      static_cast<unsigned long>(++session_n_));
-        seq_ = 0;
-        emit_start();
-        start_tick_ = xTaskGetTickCount();
-        state_ = State::Streaming;
-        ESP_LOGI(TAG, "capture start (session %s)", sid_);
-    }
-
-    if (state_ == State::Streaming) {
-        emit_frame(samples, n);
-        const std::uint32_t elapsed =
-            (xTaskGetTickCount() - start_tick_) * portTICK_PERIOD_MS;
-        if (elapsed >= kCaptureMs) {
-            emit_stop("timeout");
-            state_ = State::Idle;
-            ESP_LOGI(TAG, "capture stop (%u frames, %u ms)",
-                     static_cast<unsigned>(seq_), static_cast<unsigned>(elapsed));
-        }
-    }
+        transport_->send_line(std::string_view(line_buf_, static_cast<std::size_t>(k)));
 }
 
 }  // namespace pre_buddy::esp32

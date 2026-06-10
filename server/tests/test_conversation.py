@@ -114,3 +114,21 @@ def test_malformed_or_blank_lines_do_not_stop_the_loop():
 def test_poll_once_is_false_when_nothing_queued():
     _backend, _transport, orch = _wired()
     assert orch.poll_once() is False
+
+
+def test_forward_output_false_drains_pump_without_writing():
+    backend = FakeBleBackend()
+    transport = BleNusTransport(backend)
+    transport.open()
+    bridge = AudioBridge(pump=EventPump(), output_codec="pcm16")
+    orch = ConversationOrchestrator(transport, bridge, forward_output=False)
+    _push_input_session(backend, pcm=b"hi")
+    _drain(orch)
+
+    # The bridge still ran the turn (STT -> PRE -> TTS)...
+    assert bridge.transcripts == ["hi"]
+    assert bridge.assistant_replies == ["reply: hi"]
+    # ...but nothing was written back to the device, and the pump is empty
+    # (drained, not left to grow unbounded).
+    assert transport.sent_lines == []
+    assert len(bridge.pump) == 0

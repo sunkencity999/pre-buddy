@@ -258,23 +258,18 @@ class BleakNusBackend:
             await client.connect(timeout=timeout_s)
 
             def _on_notify(_handle: Any, data: bytearray) -> None:
-                # Notifications can arrive partial when the line straddles
-                # the ATT MTU; we accumulate and emit on newline. v1 events
-                # all fit in one notification, so the buffer normally stays
-                # empty between writes.
+                # A logical line is fragmented across notifications when it
+                # exceeds ATT_MTU-3; the firmware terminates every line with
+                # '\n', so we accumulate and split strictly on newline. (No
+                # "looks like complete JSON" heuristic — under load a chunk
+                # boundary can land right after a '}' mid-line and that would
+                # mis-split a frame.)
                 self._tx_buffer.extend(data)
                 while b"\n" in self._tx_buffer:
                     line, _, rest = self._tx_buffer.partition(b"\n")
                     self._tx_buffer = bytearray(rest)
                     with self._tx_lock:
                         self._tx_queue.append(line.decode("utf-8", errors="replace"))
-                # Also flush the buffer when it's non-empty and looks like
-                # a complete JSON line (best-effort framing).
-                if self._tx_buffer and self._tx_buffer.lstrip().startswith(b"{") \
-                        and self._tx_buffer.rstrip().endswith(b"}"):
-                    with self._tx_lock:
-                        self._tx_queue.append(self._tx_buffer.decode("utf-8", errors="replace"))
-                    self._tx_buffer = bytearray()
 
             await client.start_notify(NUS_TX_CHAR_UUID, _on_notify)
             self._client = client

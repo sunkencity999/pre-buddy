@@ -111,7 +111,15 @@ int gatt_tx_cb(uint16_t conn_handle, uint16_t attr_handle,
 // retry rather than dropping the chunk. Bounded so a real stall can't wedge
 // the caller's task.
 bool notify_bytes(uint16_t conn, const uint8_t* data, std::size_t n) {
-    for (int attempt = 0; attempt < 40; ++attempt) {
+    // Block until the controller accepts this chunk. Back-pressure (the mbuf
+    // pool / ACL buffers filling) is always transient — it clears as the radio
+    // drains — so retrying paces us to the link rate without ever dropping a
+    // byte. This matters because a dropped chunk truncates a JSON line, and a
+    // dropped *newline* makes the central's reassembler merge the next frames
+    // into one garbled blob (a whole burst lost, not just one frame). Bail only
+    // on disconnect or an absurd ~10 s stall (link genuinely wedged).
+    for (int attempt = 0; attempt < 2500; ++attempt) {
+        if (!g_connected) return false;
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, n);
         if (om == nullptr) {  // mbuf pool momentarily exhausted
             vTaskDelay(pdMS_TO_TICKS(4));
@@ -123,7 +131,7 @@ bool notify_bytes(uint16_t conn, const uint8_t* data, std::size_t n) {
             vTaskDelay(pdMS_TO_TICKS(4));
             continue;
         }
-        return false;  // disconnected or other hard error — give up on this line
+        return false;  // hard error (disconnected, etc.)
     }
     return false;
 }

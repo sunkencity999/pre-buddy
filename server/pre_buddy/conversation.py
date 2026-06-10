@@ -53,24 +53,42 @@ class ConversationOrchestrator:
         *,
         poll_interval_s: float = 0.02,
         on_line: Optional[callable] = None,
+        forward_output: bool = True,
     ) -> None:
         self._t = transport
         self._bridge = bridge
         self._poll = poll_interval_s
         self._on_line = on_line  # optional observer(direction, line) for logging
+        # When False, the bridge's output events are still drained (so the
+        # pump can't grow unbounded) but not written to the device — used
+        # while the device has no audio-output playback path yet.
+        self._forward_output = forward_output
         self._running = False
 
     # ── outbound drain ──────────────────────────────────────────────────
 
     def _flush_outbound(self) -> int:
-        """Send every queued bridge output event back to the device."""
-        sent = 0
+        """Drain the bridge's queued output events.
+
+        Always empties the pump so it can't grow unbounded. Writes each line
+        back to the device only when output forwarding is enabled, and a
+        per-line write failure is logged rather than raised — one bad BLE
+        write must not tear down the whole conversation loop.
+        """
+        drained = 0
         for line in self._bridge.pump.iter_lines():
-            self._t.send_line(line)
+            drained += 1
+            if not self._forward_output:
+                continue
+            try:
+                self._t.send_line(line)
+            except Exception as exc:  # noqa: BLE001 — keep the loop alive
+                if self._on_line:
+                    self._on_line("err", f"send_line {type(exc).__name__}: {str(exc)[:80]}")
+                continue
             if self._on_line:
                 self._on_line("out", line)
-            sent += 1
-        return sent
+        return drained
 
     def announce_codec(self, *, name: str = "pcm16", sample_rate_hz: int = 16000) -> int:
         """Tell the device which wire codec to expect, then flush it out."""

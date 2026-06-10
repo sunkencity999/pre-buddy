@@ -13,6 +13,7 @@
 #include "esp32_led.h"
 #include "esp32_servo.h"
 #include "esp32_speaker.h"
+#include "esp32_mic.h"
 
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
@@ -130,6 +131,7 @@ void app_main() {
     pb_esp::Esp32DisplayDriver display;
     pb_esp::Esp32BleTransport ble;
     pb_esp::Esp32SpeakerDriver speaker;
+    pb_esp::Esp32MicDriver mic;
 
     // Order matters: display brings up the shared internal I2C bus (M5GFX);
     // led init enables the 5V boost + VM_EN that power the body; servo init
@@ -158,6 +160,11 @@ void app_main() {
     }
     speaker.stop_playback();
     ESP_LOGI(kTag, "boot chime played");
+
+    // Phase 2 mic bring-up: capture continuously and log a peak level each
+    // second to verify the mic (clap/talk → the number jumps). The chime
+    // above released I2S_NUM_1 via stop_playback, so RX can claim it now.
+    mic.start_capture(16000, 320, nullptr, nullptr);
 
     pb_esp::Esp32NvsCharacterStore store;
     store.init();

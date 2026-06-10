@@ -30,6 +30,13 @@ class Esp32WakeWordDetector : public hal::IWakeWordDetector {
     bool is_running() const noexcept override;
     std::string_view active_phrase() const noexcept override;
 
+    // Feed mono PCM16 (from the mic capture) into the AFE. Call with frames of
+    // feed_chunksize() samples; set the mic frame size to match.
+    void feed(const std::int16_t* samples, std::size_t num_samples) noexcept;
+
+    // The AFE's required feed chunk size in mono samples (0 until start()).
+    std::size_t feed_chunksize() const noexcept;
+
    private:
     bool running_ = false;
     std::string active_phrase_;

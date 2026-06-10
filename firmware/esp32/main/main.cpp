@@ -14,6 +14,7 @@
 #include "esp32_servo.h"
 #include "esp32_speaker.h"
 #include "esp32_mic.h"
+#include "esp32_wake_word.h"
 
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
@@ -42,6 +43,15 @@ namespace pb_esp = pre_buddy::esp32;
 namespace {
 
 constexpr const char* kTag = "pre-buddy";
+
+// Wake-word plumbing: the esp-sr fetch task fires on_wake_word (off the main
+// task), which just sets a flag the main loop turns into a WakeWord event.
+// mic_to_afe routes captured mic frames into the detector's AFE.
+volatile bool g_wake_fired = false;
+void on_wake_word(std::string_view, float, void*) noexcept { g_wake_fired = true; }
+void mic_to_afe(const std::int16_t* frame, std::size_t n, void* user) noexcept {
+    static_cast<pb_esp::Esp32WakeWordDetector*>(user)->feed(frame, n);
+}
 
 pb::Event::Tier tier_from(const cJSON* data, const char* key) noexcept {
     const cJSON* t = cJSON_GetObjectItemCaseSensitive(data, key);
@@ -132,6 +142,7 @@ void app_main() {
     pb_esp::Esp32BleTransport ble;
     pb_esp::Esp32SpeakerDriver speaker;
     pb_esp::Esp32MicDriver mic;
+    pb_esp::Esp32WakeWordDetector wake;
 
     // Order matters: display brings up the shared internal I2C bus (M5GFX);
     // led init enables the 5V boost + VM_EN that power the body; servo init
@@ -161,10 +172,12 @@ void app_main() {
     speaker.stop_playback();
     ESP_LOGI(kTag, "boot chime played");
 
-    // Phase 2 mic bring-up: capture continuously and log a peak level each
-    // second to verify the mic (clap/talk → the number jumps). The chime
-    // above released I2S_NUM_1 via stop_playback, so RX can claim it now.
-    mic.start_capture(16000, 320, nullptr, nullptr);
+    // Wake-word: create the AFE first (so we know its feed chunk size), then
+    // start the mic feeding mono frames straight into it. The chime above
+    // released I2S_NUM_1 via stop_playback, so RX can claim it now. Say
+    // "Hi, ESP" to trigger.
+    wake.start("hi esp", on_wake_word, nullptr);
+    mic.start_capture(16000, wake.feed_chunksize(), mic_to_afe, &wake);
 
     pb_esp::Esp32NvsCharacterStore store;
     store.init();
@@ -240,6 +253,18 @@ void app_main() {
             ESP_LOGI(kTag, "power-key long press → graceful shutdown");
             servo.disable();
             led.shutdown();
+        }
+
+        // Wake word ("Hi, ESP") detected on the esp-sr fetch task → react.
+        if (g_wake_fired) {
+            g_wake_fired = false;
+            pb::Event ev;
+            ev.kind = pb::EventKind::WakeWord;
+            const pb::EmbodimentCommand cmd = loop.dispatch(ev);
+            ESP_LOGI(kTag, "wake word -> expr=%d motion=%d",
+                     static_cast<int>(cmd.expression), static_cast<int>(cmd.has_motion));
+            idle_ticks = 0;
+            idled = false;
         }
 
         // After a quiet spell, relax everything to the calm idle pose.

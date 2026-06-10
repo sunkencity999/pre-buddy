@@ -15,6 +15,7 @@
 #include "esp32_speaker.h"
 #include "esp32_mic.h"
 #include "esp32_wake_word.h"
+#include "esp32_audio_in.h"
 
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
@@ -46,11 +47,14 @@ constexpr const char* kTag = "pre-buddy";
 
 // Wake-word plumbing: the esp-sr fetch task fires on_wake_word (off the main
 // task), which just sets a flag the main loop turns into a WakeWord event.
-// mic_to_afe routes captured mic frames into the detector's AFE.
+// mic_to_afe routes captured mic frames into the detector's AFE *and* into the
+// audio-in streamer (which only forwards them once a capture is armed).
 volatile bool g_wake_fired = false;
+pb_esp::Esp32AudioInStreamer* g_audio_in = nullptr;
 void on_wake_word(std::string_view, float, void*) noexcept { g_wake_fired = true; }
 void mic_to_afe(const std::int16_t* frame, std::size_t n, void* user) noexcept {
     static_cast<pb_esp::Esp32WakeWordDetector*>(user)->feed(frame, n);
+    if (g_audio_in != nullptr) g_audio_in->feed(frame, n);
 }
 
 pb::Event::Tier tier_from(const cJSON* data, const char* key) noexcept {
@@ -143,6 +147,8 @@ void app_main() {
     pb_esp::Esp32SpeakerDriver speaker;
     pb_esp::Esp32MicDriver mic;
     pb_esp::Esp32WakeWordDetector wake;
+    pb_esp::Esp32AudioInStreamer audio_in;
+    g_audio_in = &audio_in;  // mic_to_afe forwards frames here once a capture is armed
 
     // Order matters: display brings up the shared internal I2C bus (M5GFX);
     // led init enables the 5V boost + VM_EN that power the body; servo init
@@ -204,6 +210,7 @@ void app_main() {
         });
 
     ble.start("pre-buddy");
+    audio_in.start(&ble);  // TX task + msg buffer for pre.audio.input_* events
 
     pb::RobotLoop loop(outcome.character, servo, led, display);
     loop.reset_to_idle();
@@ -263,6 +270,9 @@ void app_main() {
             const pb::EmbodimentCommand cmd = loop.dispatch(ev);
             ESP_LOGI(kTag, "wake word -> expr=%d motion=%d",
                      static_cast<int>(cmd.expression), static_cast<int>(cmd.has_motion));
+            // Arm a mic-capture session so the question gets streamed to PRE.
+            // Only worth it if a central is actually connected to receive it.
+            if (ble.is_connected()) audio_in.request_capture();
             idle_ticks = 0;
             idled = false;
         }

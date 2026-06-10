@@ -29,6 +29,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 
 #include <cstring>
@@ -55,6 +56,107 @@ void on_wake_word(std::string_view, float, void*) noexcept { g_wake_fired = true
 void mic_to_afe(const std::int16_t* frame, std::size_t n, void* user) noexcept {
     static_cast<pb_esp::Esp32WakeWordDetector*>(user)->feed(frame, n);
     if (g_audio_in != nullptr) g_audio_in->feed(frame, n);
+}
+
+// ── Audio output (PRE's spoken reply) ───────────────────────────────────
+// pre.audio.output_* lines arrive over BLE; we base64-decode the PCM16 into a
+// PSRAM buffer and, on output_stop, take over the shared I2S bus to play it.
+// Speaker and mic share I2S_NUM_1, so mic capture must pause during playback.
+constexpr std::size_t kOutCapSamples = 16000 * 20;  // 20 s @ 16 kHz, in PSRAM
+std::int16_t* g_out_buf = nullptr;
+std::size_t g_out_cap = 0;
+std::size_t g_out_len = 0;
+std::uint32_t g_out_rate = 16000;
+bool g_out_active = false;
+
+int b64_val(char c) noexcept {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;  // '=' padding or stray char
+}
+
+// Decode base64 `src` into `dst` (capacity dstcap bytes). Returns bytes written.
+std::size_t b64_decode(const char* src, std::size_t len,
+                       std::uint8_t* dst, std::size_t dstcap) noexcept {
+    int acc = 0, bits = 0;
+    std::size_t o = 0;
+    for (std::size_t i = 0; i < len; ++i) {
+        const int v = b64_val(src[i]);
+        if (v < 0) continue;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (o < dstcap) dst[o++] = static_cast<std::uint8_t>((acc >> bits) & 0xFF);
+        }
+    }
+    return o;
+}
+
+// Take over I2S to play the buffered reply, then hand the bus back to the mic.
+void play_output(pb_esp::Esp32MicDriver& mic, pb_esp::Esp32SpeakerDriver& speaker,
+                 pb_esp::Esp32WakeWordDetector& wake) noexcept {
+    if (g_out_buf == nullptr || g_out_len == 0) return;
+    ESP_LOGI(kTag, "playing %u samples @ %u Hz", static_cast<unsigned>(g_out_len),
+             static_cast<unsigned>(g_out_rate));
+    mic.stop_capture();                  // release I2S_NUM_1 (RX)
+    speaker.start_playback(g_out_rate);  // claim I2S_NUM_1 (TX)
+    constexpr std::size_t kChunk = 512;
+    for (std::size_t off = 0; off < g_out_len; off += kChunk) {
+        std::size_t m = g_out_len - off;
+        if (m > kChunk) m = kChunk;
+        speaker.play_frame(g_out_buf + off, m);
+    }
+    speaker.stop_playback();             // release I2S_NUM_1
+    mic.start_capture(16000, wake.feed_chunksize(), mic_to_afe, &wake);  // re-claim RX
+    g_out_len = 0;
+    ESP_LOGI(kTag, "playback done; mic + wake resumed");
+}
+
+// If `buf` is a pre.audio.output_* event, handle it (buffer / play) and return
+// true. Otherwise return false so the caller routes it as a normal event.
+bool handle_output_line(const char* buf, std::size_t n,
+                        pb_esp::Esp32MicDriver& mic, pb_esp::Esp32SpeakerDriver& speaker,
+                        pb_esp::Esp32WakeWordDetector& wake) noexcept {
+    cJSON* root = cJSON_ParseWithLength(buf, n);
+    if (root == nullptr) return false;
+    const cJSON* ev = cJSON_GetObjectItemCaseSensitive(root, "event");
+    if (!cJSON_IsString(ev) || ev->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return false;
+    }
+    const char* e = ev->valuestring;
+    bool handled = true;
+    if (std::strcmp(e, "pre.audio.output_start") == 0) {
+        const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+        const cJSON* sr = data ? cJSON_GetObjectItemCaseSensitive(data, "sample_rate_hz") : nullptr;
+        g_out_rate = cJSON_IsNumber(sr) ? static_cast<std::uint32_t>(sr->valuedouble) : 16000;
+        g_out_len = 0;
+        g_out_active = true;
+        ESP_LOGI(kTag, "audio output start (rate %u)", static_cast<unsigned>(g_out_rate));
+    } else if (std::strcmp(e, "pre.audio.output_frame") == 0) {
+        if (g_out_active && g_out_buf != nullptr) {
+            const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+            const cJSON* d = data ? cJSON_GetObjectItemCaseSensitive(data, "data") : nullptr;
+            if (cJSON_IsString(d) && d->valuestring != nullptr) {
+                const std::size_t room = (g_out_cap - g_out_len) * sizeof(std::int16_t);
+                const std::size_t got = b64_decode(
+                    d->valuestring, std::strlen(d->valuestring),
+                    reinterpret_cast<std::uint8_t*>(g_out_buf + g_out_len), room);
+                g_out_len += got / sizeof(std::int16_t);
+            }
+        }
+    } else if (std::strcmp(e, "pre.audio.output_stop") == 0) {
+        g_out_active = false;
+        play_output(mic, speaker, wake);
+    } else {
+        handled = false;  // not an audio output event
+    }
+    cJSON_Delete(root);
+    return handled;
 }
 
 pb::Event::Tier tier_from(const cJSON* data, const char* key) noexcept {
@@ -212,6 +314,16 @@ void app_main() {
     ble.start("pre-buddy");
     audio_in.start(&ble);  // TX task + msg buffer for pre.audio.input_* events
 
+    // PSRAM buffer for PRE's spoken reply (pre.audio.output_* frames).
+    g_out_buf = static_cast<std::int16_t*>(
+        heap_caps_malloc(kOutCapSamples * sizeof(std::int16_t), MALLOC_CAP_SPIRAM));
+    if (g_out_buf != nullptr) {
+        g_out_cap = kOutCapSamples;
+    } else {
+        ESP_LOGE(kTag, "audio output buffer alloc failed (%u KB PSRAM)",
+                 static_cast<unsigned>(kOutCapSamples * sizeof(std::int16_t) / 1024));
+    }
+
     pb::RobotLoop loop(outcome.character, servo, led, display);
     loop.reset_to_idle();
 
@@ -221,7 +333,7 @@ void app_main() {
     // Main pump. Yield ~every 10 ms so the IDLE task runs (and feeds the
     // task watchdog) instead of busy-spinning a core. The real version
     // will block on an event group signalled from the BLE RX callback.
-    constexpr std::size_t kBufSize = 256;
+    constexpr std::size_t kBufSize = 2048;  // matches the RX framer; fits audio lines
     char buf[kBufSize];
     std::uint32_t ticks = 0;            // 10 ms ticks
     std::uint32_t idle_ticks = 0;       // ticks since the last event
@@ -232,19 +344,26 @@ void app_main() {
     constexpr std::uint32_t kAmbientGap = 1700;  // ~17 s between subtle glances
 
     while (true) {
-        if (ble.has_incoming()) {
+        // Drain every framed line this tick (audio output arrives as a burst
+        // of frames). Audio output events are handled inline (buffer/play);
+        // everything else routes through the embodiment loop.
+        while (ble.has_incoming()) {
             std::size_t n = ble.pop_incoming(buf, kBufSize);
-            if (n > 0) {
-                pb::Event ev = decode_event_json(buf, n);
-                const pb::EmbodimentCommand cmd = loop.dispatch(ev);
-                ESP_LOGI(kTag, "event kind=%d -> expr=%d motion=%d led=%d",
-                         static_cast<int>(ev.kind),
-                         static_cast<int>(cmd.expression),
-                         static_cast<int>(cmd.has_motion),
-                         static_cast<int>(cmd.led));
+            if (n == 0) break;
+            if (handle_output_line(buf, n, mic, speaker, wake)) {
                 idle_ticks = 0;
                 idled = false;
+                continue;
             }
+            pb::Event ev = decode_event_json(buf, n);
+            const pb::EmbodimentCommand cmd = loop.dispatch(ev);
+            ESP_LOGI(kTag, "event kind=%d -> expr=%d motion=%d led=%d",
+                     static_cast<int>(ev.kind),
+                     static_cast<int>(cmd.expression),
+                     static_cast<int>(cmd.has_motion),
+                     static_cast<int>(cmd.led));
+            idle_ticks = 0;
+            idled = false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
         ++ticks;

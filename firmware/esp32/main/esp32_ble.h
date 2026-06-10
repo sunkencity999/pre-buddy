@@ -16,10 +16,11 @@ class Esp32BleTransport : public hal::IBleTransport {
    public:
     Esp32BleTransport() noexcept = default;
 
-    // The framer accumulates partial notifications from the central into
-    // complete \n-terminated lines. Exposed so the RX callback can feed
-    // it directly with the bytes from the GATT write event.
-    LineFramer<512>& framer() noexcept { return framer_; }
+    // The framer accumulates partial GATT writes from the central into
+    // complete \n-terminated lines. Exposed so the RX callback can feed it
+    // directly. Sized for the largest line we receive — base64 PCM16 audio
+    // output frames (~1.4 KB), well past the ~300 B control events.
+    LineFramer<2048>& framer() noexcept { return framer_; }
 
     void start(std::string_view device_name) noexcept override;
     void stop() noexcept override;
@@ -30,7 +31,7 @@ class Esp32BleTransport : public hal::IBleTransport {
     bool send_line(std::string_view line) noexcept override;
 
    private:
-    LineFramer<512> framer_;
+    LineFramer<2048> framer_;
 };
 
 }  // namespace pre_buddy::esp32

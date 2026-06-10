@@ -103,8 +103,10 @@ class BleNusTransport:
             raise TransportError("cannot send while disconnected")
         if "\n" in line:
             raise ValueError("send_line: payload must not contain newlines")
-        # NUS RX takes raw bytes; the framing is "one BLE write == one line".
-        self._backend.write_rx(line.encode("utf-8"))
+        # Terminate the line with '\n' so the peripheral's framer can
+        # reassemble it from however many MTU-sized GATT writes the backend
+        # splits it into (audio output frames exceed one write).
+        self._backend.write_rx((line + "\n").encode("utf-8"))
         self.sent_lines.append(line)
 
     def recv_line(self) -> Optional[str]:
@@ -304,13 +306,21 @@ class BleakNusBackend:
             raise TransportError("write_rx while disconnected")
 
         async def _write_async() -> None:
-            # response=False (write-without-response) is faster but not
-            # supported by every NUS peripheral; default to response=True
-            # for reliability. v1 throughput is low (one event per dozens
-            # of ms at most), so the cost is acceptable.
-            await client.write_gatt_char(NUS_RX_CHAR_UUID, payload, response=True)
+            # Fragment to (ATT_MTU - 3) and write each piece with
+            # response=True. A sub-MTU write is a single valid ATT op (not a
+            # "long write", which the peripheral rejected with Invalid
+            # Attribute Value Length) and is ACK-paced, so the peripheral never
+            # drops a fragment and its single-line framer never overruns. The
+            # peripheral reassembles the pieces on the trailing '\n'.
+            mtu = getattr(client, "mtu_size", 23) or 23
+            chunk = max(20, mtu - 3)
+            for i in range(0, len(payload), chunk):
+                await client.write_gatt_char(
+                    NUS_RX_CHAR_UUID, payload[i:i + chunk], response=True)
 
-        self._call(_write_async(), timeout_s=5.0)
+        # One line = a handful of fragments at ~one connection-interval each;
+        # scale the deadline with size so big audio frames don't time out.
+        self._call(_write_async(), timeout_s=max(10.0, len(payload) / 200.0))
 
     def pop_tx_line(self) -> Optional[str]:
         with self._tx_lock:

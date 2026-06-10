@@ -80,16 +80,17 @@ int gatt_rx_cb(uint16_t conn_handle, uint16_t attr_handle,
     (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
     if (g_instance == nullptr) return 0;
-    // The server frames "one BLE write == one JSON line" with no trailing
-    // newline. Feed all mbuf segments of this write, then a synthetic '\n'
-    // so the newline-based LineFramer completes the line.
+    // The central terminates every logical line with '\n' and fragments it
+    // across as many MTU-sized writes as needed (audio output frames span
+    // several). Feed the raw bytes straight into the newline framer — it
+    // completes a line when the real '\n' arrives, no matter how the writes
+    // fall. (Previously we fabricated a '\n' per write, which only held while
+    // one write == one line.)
     taskENTER_CRITICAL(&g_mux);
     for (struct os_mbuf* om = ctxt->om; om != nullptr; om = SLIST_NEXT(om, om_next)) {
         g_instance->framer().feed(reinterpret_cast<const uint8_t*>(om->om_data),
                                   om->om_len);
     }
-    static const uint8_t kNewline = '\n';
-    g_instance->framer().feed(&kNewline, 1);
     taskEXIT_CRITICAL(&g_mux);
     return 0;
 }

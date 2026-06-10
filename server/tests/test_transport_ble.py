@@ -72,7 +72,9 @@ def test_send_line_writes_to_rx_as_utf8_bytes() -> None:
     transport.send_line('{"event":"pre.system.proximity","data":{"distance_cm":35}}')
     assert len(backend.rx_writes) == 1
     assert backend.rx_writes[0].startswith(b'{"event":"pre.system.proximity"')
-    assert backend.rx_writes[0].endswith(b"}")
+    # send_line appends a '\n' line terminator (the real backend fragments to
+    # the MTU; the fake records the one logical write).
+    assert backend.rx_writes[0].endswith(b"}\n")
 
 
 def test_send_line_records_sent_for_observability() -> None:
@@ -169,9 +171,10 @@ def test_buddy_server_runs_against_ble_transport() -> None:
 
     assert sent == len(demo_events())
     assert len(backend.rx_writes) == sent
-    # Every write is a JSON object — sanity-check the first/last bytes.
+    # Every write is a JSON object (with the '\n' line terminator) — sanity
+    # check the first/last bytes.
     for w in backend.rx_writes:
-        assert w.startswith(b"{") and w.endswith(b"}")
+        assert w.startswith(b"{") and w.endswith(b"}\n")
 
 
 def test_buddy_server_receives_backend_tx_lines() -> None:

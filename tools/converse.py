@@ -30,6 +30,9 @@ def main() -> int:
     ap.add_argument("--device-name", default="pre-buddy")
     ap.add_argument("--pre-url", default="ws://localhost:7749")
     ap.add_argument("--sample-rate", type=int, default=16000)
+    ap.add_argument("--out-rate", type=int, default=8000,
+                    help="sample rate for the spoken reply (default 8000 — half "
+                         "the BLE bytes; fine for the small robot speaker)")
     ap.add_argument("--connect-timeout", type=float, default=20.0)
     ap.add_argument("--play-back", action="store_true",
                     help="write the spoken reply back to the device (needs the "
@@ -50,6 +53,7 @@ def main() -> int:
         pre_client=PreWsClient(ws_url=args.pre_url),
         sample_rate_hz=args.sample_rate,
         output_codec="pcm16",
+        output_sample_rate_hz=args.out_rate,
     )
 
     def log(direction: str, line: str) -> None:

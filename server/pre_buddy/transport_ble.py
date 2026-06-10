@@ -203,6 +203,19 @@ class BleakNusBackend:
         self._tx_lock = threading.Lock()
         self._tx_queue: Deque[str] = deque()
         self._tx_buffer = bytearray()
+        self._wwr_logged = False  # one-shot log of the chosen write mode
+
+    def _cb_peripheral(self) -> Any:
+        """The underlying CoreBluetooth CBPeripheral, used for
+        write-without-response flow control. Returns None on non-macOS or if
+        bleak's internals differ (caller then uses reliable response=True)."""
+        obj: Any = self._client
+        try:
+            for attr in ("_backend", "_delegate", "peripheral"):
+                obj = getattr(obj, attr)
+            return obj if hasattr(obj, "canSendWriteWithoutResponse") else None
+        except Exception:
+            return None
 
     # ── loop plumbing ──────────────────────────────────────────────────
 
@@ -306,20 +319,35 @@ class BleakNusBackend:
             raise TransportError("write_rx while disconnected")
 
         async def _write_async() -> None:
-            # Fragment to (ATT_MTU - 3) and write each piece with
-            # response=True. A sub-MTU write is a single valid ATT op (not a
-            # "long write", which the peripheral rejected with Invalid
-            # Attribute Value Length) and is ACK-paced, so the peripheral never
-            # drops a fragment and its single-line framer never overruns. The
-            # peripheral reassembles the pieces on the trailing '\n'.
+            # Fragment to (ATT_MTU - 3); each piece is a single valid ATT op
+            # (not a rejected "long write"). Prefer write-WITHOUT-response,
+            # which streams several packets per connection interval (~link
+            # rate) instead of stalling a full round-trip per fragment — the
+            # difference between ~6 KB/s and ~19 KB/s for audio output.
+            #
+            # bleak's CoreBluetooth backend fires write-without-response and
+            # forgets, so we pace it ourselves on canSendWriteWithoutResponse
+            # (else CoreBluetooth's queue overflows and silently drops). If we
+            # can't reach the CBPeripheral, fall back to reliable response=True.
             mtu = getattr(client, "mtu_size", 23) or 23
             chunk = max(20, mtu - 3)
+            peripheral = self._cb_peripheral()
+            if not self._wwr_logged:
+                self._wwr_logged = True
+                import sys
+                print(f"[ble] output writes: {'write-without-response (flow-controlled)' if peripheral else 'write-with-response (fallback)'}, mtu={mtu}",
+                      file=sys.stderr, flush=True)
             for i in range(0, len(payload), chunk):
-                await client.write_gatt_char(
-                    NUS_RX_CHAR_UUID, payload[i:i + chunk], response=True)
+                piece = payload[i:i + chunk]
+                if peripheral is not None:
+                    spins = 0
+                    while not peripheral.canSendWriteWithoutResponse() and spins < 2000:
+                        await asyncio.sleep(0.001)
+                        spins += 1
+                    await client.write_gatt_char(NUS_RX_CHAR_UUID, piece, response=False)
+                else:
+                    await client.write_gatt_char(NUS_RX_CHAR_UUID, piece, response=True)
 
-        # One line = a handful of fragments at ~one connection-interval each;
-        # scale the deadline with size so big audio frames don't time out.
         self._call(_write_async(), timeout_s=max(10.0, len(payload) / 200.0))
 
     def pop_tx_line(self) -> Optional[str]:

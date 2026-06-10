@@ -135,6 +135,11 @@ class AudioBridge:
     # which plays int16 frames directly) since we send PCM over a high-MTU
     # BLE link rather than Opus-compressing it.
     output_codec: str = "opus"
+    # Sample rate for the spoken reply. Defaults to sample_rate_hz; the loop
+    # sets a lower rate (e.g. 8 kHz) so the reply is half the bytes to ship
+    # over BLE — fine for the small robot speaker, while input stays 16 kHz
+    # for Whisper accuracy.
+    output_sample_rate_hz: Optional[int] = None
 
     _input_session: Optional[_ActiveSession] = None
     _output_seq: int = 0
@@ -207,16 +212,17 @@ class AudioBridge:
         events (cancellation, completion notifications).
         """
         sid = session_id or self._session_id_factory()
+        out_rate = self.output_sample_rate_hz or self.sample_rate_hz
         self.pump.enqueue(Event(
             EventKind.AUDIO_OUTPUT_START,
             AudioOutputStartData(
                 session_id=sid,
-                sample_rate_hz=self.sample_rate_hz,
+                sample_rate_hz=out_rate,
                 codec=self.output_codec,
             ),
         ))
         seq = 0
-        for chunk in self.tts.synthesize(text, sample_rate_hz=self.sample_rate_hz):
+        for chunk in self.tts.synthesize(text, sample_rate_hz=out_rate):
             self.pump.enqueue(Event(
                 EventKind.AUDIO_OUTPUT_FRAME,
                 AudioOutputFrameData(

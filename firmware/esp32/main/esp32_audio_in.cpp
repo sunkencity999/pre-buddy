@@ -16,9 +16,14 @@ namespace {
 
 constexpr const char* TAG = "pre-buddy-audioin";
 constexpr std::uint32_t kSampleRate = 16000;
-constexpr std::uint32_t kCaptureMs = 6000;             // listen window per wake
+constexpr std::uint32_t kCaptureMs = 6000;             // MAX listen window (safety cap)
 constexpr std::size_t kChunkSamples = 512;             // PCM samples per frame line
 constexpr std::size_t kCapSamples = kSampleRate * kCaptureMs / 1000;  // 96000
+// End-of-speech (VAD-ish): once a frame peaks above kSpeechPeak we're hearing
+// speech; after kSilenceSamples of trailing quiet we end the capture early.
+constexpr std::int32_t kSpeechPeak = 3500;             // |sample| above this = voice
+constexpr std::size_t kSilenceSamples = kSampleRate * 900 / 1000;  // 0.9 s of quiet
+constexpr std::uint32_t kMinCaptureMs = 500;           // never end before this
 
 const char kB64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -99,6 +104,9 @@ void Esp32AudioInStreamer::feed(const std::int16_t* samples,
         if (!request_) return;
         request_ = false;
         cap_len_ = 0;
+        speech_started_ = false;
+        silence_run_ = 0;
+        vad_stop_ = false;
         start_tick_ = xTaskGetTickCount();
         std::snprintf(sid_, sizeof(sid_), "buddy-%lu",
                       static_cast<unsigned long>(++session_n_));
@@ -111,13 +119,33 @@ void Esp32AudioInStreamer::feed(const std::int16_t* samples,
         const std::size_t take = n < room ? n : room;
         std::memcpy(cap_buf_ + cap_len_, samples, take * sizeof(std::int16_t));
         cap_len_ += take;
+
+        // Peak-track this frame for end-of-speech detection.
+        std::int32_t peak = 0;
+        for (std::size_t i = 0; i < take; ++i) {
+            std::int32_t a = samples[i];
+            if (a < 0) a = -a;
+            if (a > peak) peak = a;
+        }
+        if (peak > kSpeechPeak) {
+            speech_started_ = true;
+            silence_run_ = 0;
+        } else if (speech_started_) {
+            silence_run_ += take;
+        }
+
         const std::uint32_t elapsed =
             (xTaskGetTickCount() - start_tick_) * portTICK_PERIOD_MS;
-        if (cap_len_ >= cap_cap_ || elapsed >= kCaptureMs) {
+        const bool vad_done = speech_started_ && silence_run_ >= kSilenceSamples &&
+                              elapsed >= kMinCaptureMs;
+        const bool maxed = cap_len_ >= cap_cap_ || elapsed >= kCaptureMs;
+        if (vad_done || maxed) {
+            vad_stop_ = vad_done;
             state_ = State::Sending;  // hand the buffer to the TX task
             xSemaphoreGive(drain_sig_);
-            ESP_LOGI(TAG, "capture done (%u samples, %u ms) — draining",
-                     static_cast<unsigned>(cap_len_), static_cast<unsigned>(elapsed));
+            ESP_LOGI(TAG, "capture done (%u samples, %u ms, %s) — draining",
+                     static_cast<unsigned>(cap_len_), static_cast<unsigned>(elapsed),
+                     vad_done ? "vad_silence" : "timeout");
         }
     }
     // State::Sending — TX task owns cap_buf_; drop frames until it's Idle again.
@@ -136,7 +164,7 @@ void Esp32AudioInStreamer::tx_loop() noexcept {
             if (chunk > kChunkSamples) chunk = kChunkSamples;
             emit_frame(cap_buf_ + off, chunk);
         }
-        emit_stop("timeout");
+        emit_stop(vad_stop_ ? "vad_silence" : "timeout");
         ESP_LOGI(TAG, "drained %u frames (%u samples)",
                  static_cast<unsigned>(seq_), static_cast<unsigned>(total));
         state_ = State::Idle;  // allow the next capture to arm

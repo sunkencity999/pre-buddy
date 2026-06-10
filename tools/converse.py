@@ -56,6 +56,12 @@ def main() -> int:
         output_sample_rate_hz=args.out_rate,
     )
 
+    # Warm the STT model now (first faster-whisper call loads + compiles the
+    # graph, ~15-18s) so the user's first real turn transcribes in ~0.2s.
+    print("[converse] warming STT model (one-time)...", file=sys.stderr, flush=True)
+    bridge.stt.transcribe(b"\x00\x00" * (args.sample_rate // 2),
+                          sample_rate_hz=args.sample_rate)
+
     def log(direction: str, line: str) -> None:
         tag = {"in": "<- dev", "out": "-> dev", "err": "!! err"}.get(direction, direction)
         # Audio frames are huge; trim so the console stays readable.

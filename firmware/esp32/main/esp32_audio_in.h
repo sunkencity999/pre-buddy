@@ -70,6 +70,11 @@ class Esp32AudioInStreamer {
     std::uint32_t seq_ = 0;
     std::uint32_t start_tick_ = 0;
     std::uint32_t session_n_ = 0;
+    // Energy-based end-of-speech: once speech has started, a run of quiet
+    // frames ends the capture early (so short questions don't pad to the max).
+    bool speech_started_ = false;
+    std::size_t silence_run_ = 0;  // samples of trailing quiet since last voice
+    bool vad_stop_ = false;        // true if VAD (not the max cap) ended capture
     char sid_[24] = {0};
     // Scratch used only by the TX task (emit_* during drain).
     char line_buf_[1600];

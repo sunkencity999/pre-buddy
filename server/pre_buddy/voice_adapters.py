@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import wave
@@ -22,18 +23,58 @@ from typing import Iterable, Optional
 
 
 class WhisperStt:
-    """openai-whisper CLI STT (matches PRE: model base.en, txt output)."""
+    """STT via faster-whisper (CTranslate2) when available — ~4x faster than the
+    openai-whisper CLI on CPU at the same accuracy — falling back to the
+    `whisper` CLI (PRE's engine) otherwise. The model loads once and is reused;
+    each transcribe logs its wall time to stderr.
+    """
 
     def __init__(self, model: str = "base.en", language: str = "en",
-                 whisper_cmd: str = "whisper", timeout_s: float = 120.0) -> None:
+                 whisper_cmd: str = "whisper", timeout_s: float = 120.0,
+                 compute_type: str = "int8") -> None:
         self.model = model
         self.language = language
         self.cmd = whisper_cmd
         self.timeout_s = timeout_s
+        self.compute_type = compute_type
+        self._fw = None                      # cached faster_whisper.WhisperModel
+        self._use_fw: Optional[bool] = None  # None until probed
+
+    def _ensure_fw(self) -> bool:
+        if self._use_fw is None:
+            try:
+                from faster_whisper import WhisperModel
+                t0 = time.monotonic()
+                self._fw = WhisperModel(self.model, device="cpu",
+                                        compute_type=self.compute_type)
+                self._use_fw = True
+                print(f"[stt] faster-whisper '{self.model}' ({self.compute_type}) "
+                      f"ready in {time.monotonic() - t0:.1f}s", file=sys.stderr, flush=True)
+            except Exception as exc:  # noqa: BLE001 — fall back to the CLI
+                print(f"[stt] faster-whisper unavailable ({type(exc).__name__}); "
+                      f"using `{self.cmd}` CLI", file=sys.stderr, flush=True)
+                self._use_fw = False
+        return bool(self._use_fw)
 
     def transcribe(self, pcm16_mono: bytes, *, sample_rate_hz: int) -> str:
         if not pcm16_mono:
             return ""
+        t0 = time.monotonic()
+        text = (self._transcribe_fw(pcm16_mono) if self._ensure_fw()
+                else self._transcribe_cli(pcm16_mono, sample_rate_hz))
+        audio_s = len(pcm16_mono) / 2 / max(1, sample_rate_hz)
+        print(f"[stt] {time.monotonic() - t0:.1f}s for {audio_s:.1f}s audio -> {text!r}",
+              file=sys.stderr, flush=True)
+        return text
+
+    def _transcribe_fw(self, pcm16_mono: bytes) -> str:
+        import numpy as np
+        # faster-whisper wants 16 kHz mono float32 in [-1, 1]; input is 16 kHz.
+        audio = np.frombuffer(pcm16_mono, dtype=np.int16).astype(np.float32) / 32768.0
+        segments, _ = self._fw.transcribe(audio, language=self.language, beam_size=1)
+        return " ".join(seg.text for seg in segments).strip()
+
+    def _transcribe_cli(self, pcm16_mono: bytes, sample_rate_hz: int) -> str:
         with tempfile.TemporaryDirectory() as d:
             wav = os.path.join(d, "in.wav")
             with wave.open(wav, "wb") as w:
@@ -98,6 +139,7 @@ class PreWsClient:
             return ""
         from websockets.sync.client import connect
 
+        t0 = time.monotonic()
         parts: list[str] = []
         with connect(self.ws_url, max_size=None, open_timeout=10) as ws:
             ws.send(json.dumps({"type": "message", "content": user_text}))
@@ -116,4 +158,7 @@ class PreWsClient:
                     parts.append(m["content"])
                 elif t == "done":
                     break
-        return "".join(parts).strip()
+        reply = "".join(parts).strip()
+        print(f"[pre] {time.monotonic() - t0:.1f}s -> {reply[:60]!r}",
+              file=sys.stderr, flush=True)
+        return reply

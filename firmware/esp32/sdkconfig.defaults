@@ -29,3 +29,15 @@ CONFIG_BT_NIMBLE_ENABLED=y
 # main task. The default 3584-byte main-task stack overflows during
 # g_gfx.init() (crash in i2c/intr_alloc on a garbage pointer). Give it room.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# CoreS3 has 8MB octal PSRAM. esp-sr's wakenet + AFE need it.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# esp-sr wake-word ("Hi,ESP" wakenet9). Models live in a `model` flash
+# partition packed at build time; no command words (multinet) for now.
+CONFIG_USE_WAKENET=y
+CONFIG_SR_WN_WN9_HIESP=y
+CONFIG_USE_MULTINET=n
+CONFIG_MODEL_IN_FLASH=y

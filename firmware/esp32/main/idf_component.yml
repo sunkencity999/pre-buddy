@@ -15,15 +15,11 @@ dependencies:
   idf:
     version: ">=5.3,<5.5"
 
-  # Espressif's speech-recognition stack: wakenet wake-word + AFE
-  # front-end + multinet command words. Required by esp32_wake_word.cpp.
-  # Pulls ~30 MB of pre-trained model assets at configure time.
-  #
-  # TEMP: disabled for Stage 1 boot bring-up — nothing calls esp-sr yet
-  # and it forces a 30 MB model fetch + `model` partition. Re-enable at
-  # Stage 2.5 (mic/wake-word) together with the CMakeLists REQUIRES entry.
-  # espressif/esp-sr:
-  #   version: "^1.4.2"
+  # Espressif's speech-recognition stack: wakenet wake-word + AFE front-end.
+  # Used by esp32_wake_word.cpp. Pulls pre-trained model assets at configure
+  # time and packs them into the `model` partition.
+  espressif/esp-sr:
+    version: "^1.4.2"
 
   # M5GFX: display driver for the CoreS3 ILI9342 panel. Auto-detects the
   # CoreS3 (incl. AXP2101 PMU + AW9523 IO-expander needed to power the LCD

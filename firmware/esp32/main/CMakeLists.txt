@@ -24,9 +24,5 @@ idf_component_register(
         esp_timer
         nvs_flash
         json        # cJSON — parse incoming NUS event lines in main.cpp
-        # esp-sr — TEMP: excluded for Stage 1 boot bring-up. main.cpp does
-        # not wire the mic/speaker/wake-word drivers yet, so esp-sr is unused
-        # and also demands a `model` flash partition we don't have. Restore
-        # this (plus a custom partitions.csv with a `model` partition) at
-        # Stage 2.5 when audio is implemented.
+        esp-sr      # wakenet wake-word + AFE (esp32_wake_word.cpp)
 )

@@ -130,6 +130,11 @@ class AudioBridge:
     tts: ITts = field(default_factory=_EchoTts)
     pre_client: IPreClient = field(default_factory=_EchoPreClient)
     sample_rate_hz: int = 16000
+    # Codec announced on output_start. Defaults to "opus" for back-compat;
+    # the conversational loop wires raw "pcm16" (matching the device speaker,
+    # which plays int16 frames directly) since we send PCM over a high-MTU
+    # BLE link rather than Opus-compressing it.
+    output_codec: str = "opus"
 
     _input_session: Optional[_ActiveSession] = None
     _output_seq: int = 0
@@ -207,7 +212,7 @@ class AudioBridge:
             AudioOutputStartData(
                 session_id=sid,
                 sample_rate_hz=self.sample_rate_hz,
-                codec="opus",  # the on-device decoder is fixed at "opus" today.
+                codec=self.output_codec,
             ),
         ))
         seq = 0

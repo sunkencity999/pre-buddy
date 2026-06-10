@@ -12,6 +12,7 @@
 #include "esp32_display.h"
 #include "esp32_led.h"
 #include "esp32_servo.h"
+#include "esp32_speaker.h"
 
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
@@ -20,6 +21,7 @@
 #include "pre_buddy/robot_loop.h"
 
 #include <cstdint>
+#include <cmath>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -127,6 +129,7 @@ void app_main() {
     pb_esp::Esp32LedDriver led;
     pb_esp::Esp32DisplayDriver display;
     pb_esp::Esp32BleTransport ble;
+    pb_esp::Esp32SpeakerDriver speaker;
 
     // Order matters: display brings up the shared internal I2C bus (M5GFX);
     // led init enables the 5V boost + VM_EN that power the body; servo init
@@ -134,6 +137,27 @@ void app_main() {
     display.init();
     led.init();
     servo.init();
+
+    // Boot chime — a quick two-note rise so we can hear the speaker (AW88298
+    // amp + I2S). Generated as 16 kHz mono sine; stop_playback releases I2S1
+    // so it's free for the mic later.
+    speaker.start_playback(16000);
+    {
+        constexpr int kSR = 16000;
+        constexpr int kN = kSR / 5;  // 200 ms
+        static std::int16_t note[kN];
+        const auto play = [&](float freq) {
+            for (int i = 0; i < kN; ++i) {
+                note[i] = static_cast<std::int16_t>(
+                    7000.0f * std::sin(2.0f * 3.14159265f * freq * i / kSR));
+            }
+            speaker.play_frame(note, kN);
+        };
+        play(660.0f);
+        play(880.0f);
+    }
+    speaker.stop_playback();
+    ESP_LOGI(kTag, "boot chime played");
 
     pb_esp::Esp32NvsCharacterStore store;
     store.init();

@@ -56,15 +56,21 @@ class BleNusTransport:
 
     Same shape: ``open``, ``close``, ``send_line``, ``recv_line``,
     ``inject_inbound`` (here a no-op, kept so callers can be generic).
-    The transport doesn't own framing concerns — every ``send_line`` is
-    written as one BLE write, and every notification is treated as one
-    inbound line.
 
-    The MTU constraint: lines longer than the negotiated ATT MTU minus
-    3 bytes (typically 247 - 3 = 244 bytes) will be split by the BLE
-    stack and the peripheral will see them as separate notifications.
-    The pre.* protocol's v1 events all fit well under that ceiling, so
-    we don't reassemble on either side in this version.
+    Framing / MTU contract (matters once we stream audio):
+
+    - TX (peripheral -> central, notifications): the firmware fragments
+      each line into ATT_MTU-3 byte runs and terminates it with ``\\n``.
+      The backend reassembles by newline (see
+      :meth:`BleakNusBackend._on_notify`), so a single logical line may
+      span many notifications — which is exactly what ~1 KB base64 audio
+      frames need. Small control events still arrive in one notification.
+    - RX (central -> peripheral, writes): we send one line per GATT write
+      with no trailing newline; the peripheral reassembles the write and
+      appends its own newline, so "one write == one line" holds. A write
+      larger than the MTU rides a single reassembled GATT op, so control
+      events are unaffected (audio *output* will move to write-without-
+      response fragmentation when that path lands).
     """
 
     def __init__(self, backend: BleBackend, *, connect_timeout_s: float = 10.0) -> None:

@@ -16,6 +16,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_att.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
@@ -49,6 +50,13 @@ volatile uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 volatile bool g_connected = false;
 uint8_t g_own_addr_type = 0;
 char g_device_name[32] = "pre-buddy";
+
+// Ask for the largest MTU we'll ever need. The negotiated value is
+// min(this, central's preference); leaving it at NimBLE's 23-byte default
+// caps every notification at 20 bytes and forces slow long-writes, which is
+// fine for control events but far too slow for streaming audio. 512 lets a
+// ~20 ms PCM16 frame cross in ~2 notifications instead of dozens.
+constexpr uint16_t kPreferredMtu = 512;
 
 // NUS 128-bit UUIDs, little-endian byte order (reverse of the dashed string
 // form in uuids.h). 6E40000x-B5A3-F393-E0A9-E50E24DCCA9E.
@@ -96,6 +104,30 @@ int gatt_tx_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+// Notify a single (already MTU-sized) byte run on the TX characteristic.
+// ble_gatts_notify_custom consumes the mbuf regardless of outcome, so each
+// retry allocates a fresh one. The controller's notify buffers fill up under
+// sustained streaming (audio); ENOMEM there is transient, so back off and
+// retry rather than dropping the chunk. Bounded so a real stall can't wedge
+// the caller's task.
+bool notify_bytes(uint16_t conn, const uint8_t* data, std::size_t n) {
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        struct os_mbuf* om = ble_hs_mbuf_from_flat(data, n);
+        if (om == nullptr) {  // mbuf pool momentarily exhausted
+            vTaskDelay(pdMS_TO_TICKS(4));
+            continue;
+        }
+        int rc = ble_gatts_notify_custom(conn, g_tx_val_handle, om);
+        if (rc == 0) return true;
+        if (rc == BLE_HS_ENOMEM) {  // controller TX buffers full; let them drain
+            vTaskDelay(pdMS_TO_TICKS(4));
+            continue;
+        }
+        return false;  // disconnected or other hard error — give up on this line
+    }
+    return false;
+}
+
 const struct ble_gatt_chr_def kNusChrs[] = {
     {
         .uuid = &kRxUuid.u,
@@ -128,11 +160,29 @@ int gap_event(struct ble_gap_event* event, void* arg) {
                 g_conn_handle = event->connect.conn_handle;
                 g_connected = true;
                 ESP_LOGI(TAG, "central connected (handle %d)", g_conn_handle);
+                // Push for audio-grade throughput. The central (macOS) clamps
+                // these to its own policy, so treat failures as advisory.
+                struct ble_gap_upd_params up;
+                std::memset(&up, 0, sizeof(up));
+                up.itvl_min = 12;            // 15 ms  (units of 1.25 ms)
+                up.itvl_max = 24;            // 30 ms
+                up.latency = 0;
+                up.supervision_timeout = 400;  // 4 s   (units of 10 ms)
+                int urc = ble_gap_update_params(event->connect.conn_handle, &up);
+                if (urc != 0) ESP_LOGW(TAG, "update_params rc=%d", urc);
+                // Longer link-layer PDUs so a full MTU rides in one packet.
+                ble_gap_set_data_len(event->connect.conn_handle, 251, 2120);
             } else {
                 ESP_LOGW(TAG, "connect failed (status %d); re-advertising",
                          event->connect.status);
                 start_advertising();
             }
+            return 0;
+        case BLE_GAP_EVENT_MTU:
+            ESP_LOGI(TAG, "ATT MTU now %d", event->mtu.value);
+            return 0;
+        case BLE_GAP_EVENT_CONN_UPDATE:
+            ESP_LOGI(TAG, "conn params updated (status %d)", event->conn_update.status);
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "central disconnected (reason %d); re-advertising",
@@ -225,6 +275,9 @@ void Esp32BleTransport::start(std::string_view device_name) noexcept {
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
+    if (int mrc = ble_att_set_preferred_mtu(kPreferredMtu); mrc != 0)
+        ESP_LOGW(TAG, "set_preferred_mtu rc=%d", mrc);
+
     int rc = ble_gatts_count_cfg(kNusSvcs);
     if (rc != 0) { ESP_LOGE(TAG, "gatts_count_cfg rc=%d", rc); return; }
     rc = ble_gatts_add_svcs(kNusSvcs);
@@ -271,14 +324,27 @@ std::size_t Esp32BleTransport::pop_incoming(char* out_buf, std::size_t max_len) 
 
 bool Esp32BleTransport::send_line(std::string_view line) noexcept {
     if (!g_connected || g_tx_val_handle == 0) return false;
-    // Append '\n' so the central's line framer sees a complete line.
-    char buf[520];
-    const std::size_t n = line.size() < sizeof(buf) - 1 ? line.size() : sizeof(buf) - 1;
-    std::memcpy(buf, line.data(), n);
-    buf[n] = '\n';
-    struct os_mbuf* om = ble_hs_mbuf_from_flat(buf, n + 1);
-    if (om == nullptr) return false;
-    return ble_gatts_notify_custom(g_conn_handle, g_tx_val_handle, om) == 0;
+    const uint16_t conn = g_conn_handle;
+
+    // A notification carries at most ATT_MTU-3 bytes; anything longer is
+    // silently truncated by the stack. Split the line into MTU-sized runs
+    // and send a trailing '\n' as its own (tiny) run so the central's line
+    // framer reassembles regardless of where the splits fall. Audio frames
+    // (~950 B of base64 JSON) need this; control events usually fit one run.
+    uint16_t mtu = ble_att_mtu(conn);
+    if (mtu < 23) mtu = 23;  // not yet exchanged — fall back to the default
+    const std::size_t chunk = static_cast<std::size_t>(mtu) - 3;
+
+    const auto* p = reinterpret_cast<const uint8_t*>(line.data());
+    std::size_t remaining = line.size();
+    while (remaining > 0) {
+        const std::size_t take = remaining < chunk ? remaining : chunk;
+        if (!notify_bytes(conn, p, take)) return false;
+        p += take;
+        remaining -= take;
+    }
+    static const uint8_t kNewline = '\n';
+    return notify_bytes(conn, &kNewline, 1);
 }
 
 }  // namespace pre_buddy::esp32

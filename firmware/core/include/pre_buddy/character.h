@@ -30,6 +30,34 @@ enum class LedColor : std::uint8_t {
     Yellow,
 };
 
+constexpr std::string_view to_string(LedColor c) noexcept {
+    switch (c) {
+        case LedColor::Off:    return "off";
+        case LedColor::Blue:   return "blue";
+        case LedColor::Green:  return "green";
+        case LedColor::Amber:  return "amber";
+        case LedColor::Red:    return "red";
+        case LedColor::White:  return "white";
+        case LedColor::Cyan:   return "cyan";
+        case LedColor::Purple: return "purple";
+        case LedColor::Yellow: return "yellow";
+    }
+    return "off";
+}
+
+inline bool parse_led_color(std::string_view s, LedColor& out) noexcept {
+    if (s == "off")    { out = LedColor::Off;    return true; }
+    if (s == "blue")   { out = LedColor::Blue;   return true; }
+    if (s == "green")  { out = LedColor::Green;  return true; }
+    if (s == "amber")  { out = LedColor::Amber;  return true; }
+    if (s == "red")    { out = LedColor::Red;    return true; }
+    if (s == "white")  { out = LedColor::White;  return true; }
+    if (s == "cyan")   { out = LedColor::Cyan;   return true; }
+    if (s == "purple") { out = LedColor::Purple; return true; }
+    if (s == "yellow") { out = LedColor::Yellow; return true; }
+    return false;
+}
+
 struct CharacterProfile {
     Character id;
     std::string_view name;   // canonical lowercase id used on the wire

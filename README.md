@@ -70,11 +70,13 @@ peripherals on the M5Stack CoreS3 once a board is in hand.
 | Sprite atlas | `tools/generate_sprites.py` renders 24 PNG faces matching the viewer; `tools/sprites_to_header.py` emits RGB565 data into `firmware/esp32/main/sprites_data.h`. |
 | Cross-platform launchers | `.command` (macOS), `.desktop` (Linux), `.bat` (Windows) for setup + tray. |
 
-**Hardware-bound (needs CoreS3):**
+**Implemented + verified on hardware (M5Stack CoreS3 / K151-R):**
 
-- Button/touch input → first-boot `CharacterPicker.next()/confirm()`
-- ESP-IDF API calls inside each `firmware/esp32/main/esp32_*.cpp` stub: LEDC PWM for servos, RMT for SK6812 LED, I2S TX/PDM for speaker/mic, NimBLE for NUS peripheral, NVS for character persistence, ESP-SR for wake-word
-- Sprite blit to the ILI9342 panel (sprite *table* is host-tested; the actual `lvgl_draw_image` call is the TODO)
+- `firmware/esp32/main/esp32_*.cpp`: Feetech SCSCL serial servos (UART), the 12-LED WS2812 ring (via the PY32 I/O expander), speaker (AW88298) + mic (ES7210) over a shared I2S bus, NimBLE NUS peripheral, ESP-SR "Hi, ESP" wake-word, and user settings persisted to NVS.
+- The full **conversational loop**: wake → record → Whisper STT → PRE → spoken reply, with a "thinking" animation while PRE works (see _Conversational loop_ below).
+- Adjustable live from PRE's GUI / the `buddy_control` agent tool: LED color + brightness, volume, animations, character.
+
+**Still TODO:** button/touch input for the first-boot `CharacterPicker`; full-duplex I2S (listen while speaking); per-unit servo zero calibration.
 
 See [Hardware bring-up checklist](#hardware-bring-up-checklist) below.
 
@@ -140,7 +142,7 @@ RobotLoop (host-testable, single-file, no IDF deps)
 ```
 
 Everything left of the `─►` arrow has host tests. Everything right of
-the arrow is the ESP-IDF code that lands when the board arrives.
+the arrow is the ESP-IDF code — now implemented and verified on the CoreS3.
 
 ---
 
@@ -242,8 +244,9 @@ pre-buddy/
 For people who just want to run PRE Buddy without touching the code:
 
 ```bash
-# 1) install (one-time)
-pip install 'pre_buddy[tray,transport,bridge]'
+# 1) install (one-time). Add 'voice' (or use 'robot' = transport+bridge+voice)
+#    for the conversational loop; 'tray' for the menu-bar app.
+pip install 'pre_buddy[tray,robot]'
 
 # 2) run the setup wizard
 pre-buddy setup
@@ -264,6 +267,43 @@ pre-buddy tray
 Or grab the platform launcher from `launchers/` and double-click. See
 [`launchers/README.md`](./launchers/README.md) for install instructions
 per OS.
+
+---
+
+## Conversational loop (talk to PRE through the robot)
+
+Say **"Hi, ESP"**, ask a question, and the robot speaks PRE's answer — fully
+local. Mic audio streams to the host over BLE, Whisper transcribes it, PRE
+answers, and macOS `say` synthesizes the reply back to the robot's speaker,
+with a "thinking" animation covering PRE's latency.
+
+```bash
+# one-time: install the voice deps (faster-whisper, numpy) + BLE + WS
+pip install -e 'server[robot]'
+#   faster-whisper is the STT engine; if absent, falls back to the
+#   `whisper` CLI (pip install openai-whisper). macOS `say` does TTS.
+
+# with PRE running on ws://localhost:7749 and the robot powered on:
+.venv/bin/python tools/converse.py            # input-only (prints the reply)
+.venv/bin/python tools/converse.py --play-back # robot speaks the reply
+```
+
+For the always-on **ambient** link (robot reacts to PRE activity + exposes the
+manage-bot panel in PRE's GUI) run the bridge instead:
+
+```bash
+.venv/bin/python tools/live_bridge.py
+```
+
+**Managing the robot.** While the bridge is connected, PRE's web GUI shows a
+**PRE Buddy** panel in the sidebar (LED color/brightness, volume, animations,
+character). PRE can also adjust the robot on request via its `buddy_control`
+tool ("turn your eyes green", "lower your volume"). Settings persist in the
+robot's NVS across reboots.
+
+**Firmware.** Build + flash with ESP-IDF v5.x (see _Quickstart — firmware_).
+The board needs a cold power-cycle after flashing; the mic→PRE→speaker paths,
+wake-word, and settings are all on-device.
 
 ---
 

@@ -23,6 +23,14 @@ bridge = ["websockets>=12"]
 # Pillow loads the bundled icon. Both are optional so headless installs
 # (e.g. CI workers, server bots) stay slim.
 tray = ["pystray>=0.19", "Pillow>=10.0"]
+# Voice / conversational loop (tools/converse.py). faster-whisper is the STT
+# engine (CTranslate2, ~0.2s warm vs ~10s for the openai-whisper CLI, which is
+# the fallback if faster-whisper is absent); numpy feeds it the PCM samples.
+# macOS `say` provides TTS (no dep). Needs [transport,bridge] too for the BLE +
+# PRE WS plumbing.
+voice = ["faster-whisper>=1.0", "numpy>=1.24"]
+# Everything needed for the full robot conversational loop in one extra.
+robot = ["bleak>=0.21", "websockets>=12", "faster-whisper>=1.0", "numpy>=1.24"]
 
 [project.scripts]
 pre-buddy = "pre_buddy.cli:main"

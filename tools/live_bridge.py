@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 
 import websockets
 
 from pre_buddy.bridge import map_line
+from pre_buddy.buddy import device_lines
 from pre_buddy.serializer import dumps
 from pre_buddy.transport_ble import BleakNusBackend, BleNusTransport
 
@@ -39,7 +41,24 @@ async def main() -> int:
     print(f"[live-bridge] connecting to PRE at {args.pre_url} ...", file=sys.stderr, flush=True)
     async with websockets.connect(args.pre_url, max_size=None) as ws:
         print("[live-bridge] PRE WS connected; forwarding live events", file=sys.stderr, flush=True)
+        # Tell PRE a robot is connected so its GUI can show the manage-bot panel.
+        # PRE relays this to browser clients; it marks the bot gone when this WS
+        # closes (i.e. when this process exits).
+        await ws.send(json.dumps({"type": "buddy_status", "connected": True,
+                                  "name": args.device_name}))
         async for raw in ws:
+            # Settings from PRE's GUI / the buddy_control agent tool, broadcast
+            # to all WS clients (including us). Translate to device line(s).
+            try:
+                msg = json.loads(raw)
+            except (ValueError, TypeError):
+                msg = None
+            if isinstance(msg, dict) and msg.get("type") == "buddy_control":
+                for line in device_lines(msg.get("settings") or {}):
+                    transport.send_line(line)
+                    print(f"[live-bridge] -> robot (control): {line}", flush=True)
+                continue
+            # Otherwise map PRE's live events onto embodiment events.
             for ev in map_line(raw):
                 line = dumps(ev)
                 transport.send_line(line)

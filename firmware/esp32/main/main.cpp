@@ -16,6 +16,7 @@
 #include "esp32_mic.h"
 #include "esp32_wake_word.h"
 #include "esp32_audio_in.h"
+#include "esp32_buddy_config.h"
 
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
@@ -31,6 +32,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "nvs_flash.h"
 #include "cJSON.h"
 
 #include <cstring>
@@ -53,6 +55,10 @@ constexpr const char* kTag = "pre-buddy";
 // audio-in streamer (which only forwards them once a capture is armed).
 volatile bool g_wake_fired = false;
 pb_esp::Esp32AudioInStreamer* g_audio_in = nullptr;
+
+// User-adjustable settings (pre.buddy.config from PRE's GUI / agent tool),
+// loaded from NVS at boot and updated live. See esp32_buddy_config.
+pb_esp::BuddyConfig g_cfg;
 void on_wake_word(std::string_view, float, void*) noexcept { g_wake_fired = true; }
 void mic_to_afe(const std::int16_t* frame, std::size_t n, void* user) noexcept {
     static_cast<pb_esp::Esp32WakeWordDetector*>(user)->feed(frame, n);
@@ -107,6 +113,16 @@ void play_output(pb_esp::Esp32MicDriver& mic, pb_esp::Esp32SpeakerDriver& speake
              static_cast<unsigned>(g_out_rate));
     mic.stop_capture();                  // release I2S_NUM_1 (RX)
     speaker.start_playback(g_out_rate);  // claim I2S_NUM_1 (TX)
+    // Software volume: scale samples by g_cfg.volume/100 before playback. Done
+    // in-place on the PSRAM buffer (already consumed once it plays). Avoids
+    // poking the AW88298 gain register, which risks the amp's startup state.
+    if (g_cfg.volume < 100) {
+        const int vol = g_cfg.volume < 0 ? 0 : g_cfg.volume;
+        for (std::size_t i = 0; i < g_out_len; ++i) {
+            g_out_buf[i] = static_cast<std::int16_t>(
+                (static_cast<int>(g_out_buf[i]) * vol) / 100);
+        }
+    }
     constexpr std::size_t kChunk = 512;
     for (std::size_t off = 0; off < g_out_len; off += kChunk) {
         std::size_t m = g_out_len - off;
@@ -247,6 +263,15 @@ pb::Event decode_event_json(const char* buf, std::size_t n) noexcept {
     return ev;
 }
 
+// Drive the idle LED from settings: the user's override color if set, else the
+// character's default, at the configured brightness. Called at boot, whenever
+// we settle to idle, and on a config change.
+void apply_led(pb_esp::Esp32LedDriver& led, pb::Character character) noexcept {
+    led.set_brightness(g_cfg.led_brightness);
+    led.set_color(g_cfg.led_override ? g_cfg.led_color
+                                     : pb::profile_for(character).idle_color);
+}
+
 }  // namespace
 
 void app_main() {
@@ -260,6 +285,16 @@ void app_main() {
     pb_esp::Esp32AudioInStreamer audio_in;
     g_audio_in = &audio_in;  // mic_to_afe forwards frames here once a capture is armed
 
+    // Load persisted user settings (LED/volume/animations) before anything
+    // that reads them (the boot chime gate, the idle LED). nvs_flash_init is
+    // idempotent; init it here since the character store stub doesn't yet.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+    pb_esp::buddy_config_load(g_cfg);
+
     // Order matters: display brings up the shared internal I2C bus (M5GFX);
     // led init enables the 5V boost + VM_EN that power the body; servo init
     // then has power for torque-enable + its bring-up sweep.
@@ -269,24 +304,25 @@ void app_main() {
 
     // Boot chime — a quick two-note rise so we can hear the speaker (AW88298
     // amp + I2S). Generated as 16 kHz mono sine; stop_playback releases I2S1
-    // so it's free for the mic later.
-    speaker.start_playback(16000);
-    {
+    // so it's free for the mic later. Skipped if the user turned it off.
+    if (g_cfg.boot_chime) {
+        speaker.start_playback(16000);
         constexpr int kSR = 16000;
         constexpr int kN = kSR / 5;  // 200 ms
         static std::int16_t note[kN];
+        const int gain = (g_cfg.volume < 0 ? 0 : (g_cfg.volume > 100 ? 100 : g_cfg.volume));
         const auto play = [&](float freq) {
             for (int i = 0; i < kN; ++i) {
                 note[i] = static_cast<std::int16_t>(
-                    7000.0f * std::sin(2.0f * 3.14159265f * freq * i / kSR));
+                    (7000.0f * gain / 100) * std::sin(2.0f * 3.14159265f * freq * i / kSR));
             }
             speaker.play_frame(note, kN);
         };
         play(660.0f);
         play(880.0f);
+        speaker.stop_playback();
+        ESP_LOGI(kTag, "boot chime played");
     }
-    speaker.stop_playback();
-    ESP_LOGI(kTag, "boot chime played");
 
     // Wake-word: create the AFE first (so we know its feed chunk size), then
     // start the mic feeding mono frames straight into it. The chime above
@@ -334,6 +370,7 @@ void app_main() {
 
     pb::RobotLoop loop(outcome.character, servo, led, display);
     loop.reset_to_idle();
+    apply_led(led, loop.character());  // honour the saved LED override/brightness
 
     ESP_LOGI(kTag, "app_main: PRE Buddy stub booted; character=%d, idle face set",
              static_cast<int>(outcome.character));
@@ -371,6 +408,12 @@ void app_main() {
             if (handle_output_line(buf, n, mic, speaker, wake)) {
                 idle_ticks = 0;
                 idled = false;
+                continue;
+            }
+            // User settings (pre.buddy.config) from PRE's GUI / agent tool:
+            // update g_cfg + NVS, then re-apply the LED right away.
+            if (pb_esp::buddy_config_apply_json(g_cfg, buf, n)) {
+                apply_led(led, loop.character());
                 continue;
             }
             pb::Event ev = decode_event_json(buf, n);
@@ -420,25 +463,30 @@ void app_main() {
             g_played = false;
             thinking = false;
             loop.reset_to_idle();
+            apply_led(led, loop.character());
             idle_ticks = 0;
             idled = true;
             next_ambient = idle_ticks + kAmbientGap;
         }
-        // Question fully sent → enter the "thinking" pose until the reply plays.
+        // Question fully sent → await PRE's reply. `thinking` suppresses idle
+        // behaviour during the wait regardless; the visible "thinking" pose
+        // (face + cyan ring + sway) only shows if the user left it enabled.
         if (audio_in.reply_pending()) {
             audio_in.clear_reply_pending();
             thinking = true;
             think_tick = ticks;
             next_think_move = ticks;  // ponder right away
-            display.show_expression(loop.character(), pb::Expression::Thinking);
-            led.set_color(pb::LedColor::Cyan);
+            if (g_cfg.thinking_anim) {
+                display.show_expression(loop.character(), pb::Expression::Thinking);
+                led.set_color(pb::LedColor::Cyan);
+            }
             ESP_LOGI(kTag, "thinking — awaiting PRE reply");
         }
         // Gentle "pondering" sway while thinking; bail after the safety cap.
         // Hold the sway while output frames are streaming in (g_out_active) so
         // servo traffic can't compete with draining the RX burst.
         if (thinking) {
-            if (!g_out_active && ticks >= next_think_move) {
+            if (g_cfg.thinking_anim && !g_out_active && ticks >= next_think_move) {
                 pb::MotionCommand m;
                 m.head_x_deg = static_cast<float>(think_dir) * 8.0f;
                 m.head_y_deg = 58.0f;  // glance slightly up, as if pondering
@@ -450,6 +498,7 @@ void app_main() {
             if (ticks - think_tick > kThinkTimeout) {
                 thinking = false;
                 loop.reset_to_idle();
+                apply_led(led, loop.character());
                 idle_ticks = 0;
                 idled = true;
                 ESP_LOGW(kTag, "thinking timed out — back to idle");
@@ -460,12 +509,15 @@ void app_main() {
         // while capturing/draining a question or showing the thinking pose.
         if (!thinking && !audio_in.is_busy() && !idled && idle_ticks >= kIdleReturn) {
             loop.reset_to_idle();
+            apply_led(led, loop.character());
             idled = true;
             next_ambient = idle_ticks + kAmbientGap;
         }
         // Subtle ambient "looking around": mostly still, a small head glance
         // every ~17 s, alternating sides — the calm alive-but-idle loop.
-        if (!thinking && !audio_in.is_busy() && idled && idle_ticks >= next_ambient) {
+        // Skipped if the user turned idle animation off.
+        if (g_cfg.idle_anim && !thinking && !audio_in.is_busy() && idled &&
+            idle_ticks >= next_ambient) {
             pb::MotionCommand m;
             m.head_x_deg = static_cast<float>(ambient_dir) * 12.0f;
             m.head_y_deg = 45.0f + (ambient_dir > 0 ? 3.0f : -3.0f);

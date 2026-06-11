@@ -16,6 +16,7 @@ idf_component_register(
         "esp32_speaker.cpp"
         "esp32_wake_word.cpp"
         "esp32_audio_in.cpp"
+        "esp32_buddy_config.cpp"
     INCLUDE_DIRS
         "."
         "${CMAKE_CURRENT_LIST_DIR}/../../core/include"

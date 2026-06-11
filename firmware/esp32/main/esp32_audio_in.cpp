@@ -103,6 +103,7 @@ void Esp32AudioInStreamer::feed(const std::int16_t* samples,
     if (state_ == State::Idle) {
         if (!request_) return;
         request_ = false;
+        reply_pending_ = false;  // new question supersedes any prior wait
         cap_len_ = 0;
         speech_started_ = false;
         silence_run_ = 0;
@@ -167,7 +168,8 @@ void Esp32AudioInStreamer::tx_loop() noexcept {
         emit_stop(vad_stop_ ? "vad_silence" : "timeout");
         ESP_LOGI(TAG, "drained %u frames (%u samples)",
                  static_cast<unsigned>(seq_), static_cast<unsigned>(total));
-        state_ = State::Idle;  // allow the next capture to arm
+        reply_pending_ = true;  // question sent → main loop shows "thinking"
+        state_ = State::Idle;   // allow the next capture to arm
     }
     tx_task_ = nullptr;
 }

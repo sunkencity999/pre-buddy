@@ -48,6 +48,12 @@ class Esp32AudioInStreamer {
 
     bool is_busy() const noexcept { return state_ != State::Idle; }
 
+    // True once a question has been fully sent and we're awaiting PRE's reply
+    // (set when the drain finishes). The main loop turns this into the
+    // "thinking" animation, then clears it.
+    bool reply_pending() const noexcept { return reply_pending_; }
+    void clear_reply_pending() noexcept { reply_pending_ = false; }
+
     // TX task body — public only so the C task trampoline can reach it.
     void tx_loop() noexcept;
 
@@ -66,6 +72,7 @@ class Esp32AudioInStreamer {
     TaskHandle_t tx_task_ = nullptr;
     volatile bool running_ = false;
     volatile bool request_ = false;
+    volatile bool reply_pending_ = false;
     volatile State state_ = State::Idle;
     std::uint32_t seq_ = 0;
     std::uint32_t start_tick_ = 0;

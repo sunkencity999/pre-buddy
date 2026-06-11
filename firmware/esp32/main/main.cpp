@@ -20,6 +20,7 @@
 #include "pre_buddy/boot_flow.h"
 #include "pre_buddy/character.h"
 #include "pre_buddy/character_picker.h"
+#include "pre_buddy/expression.h"
 #include "pre_buddy/protocol.h"
 #include "pre_buddy/robot_loop.h"
 
@@ -68,6 +69,8 @@ std::size_t g_out_cap = 0;
 std::size_t g_out_len = 0;
 std::uint32_t g_out_rate = 16000;
 bool g_out_active = false;
+int g_out_frames = 0;            // output_frame events accepted this session (debug)
+volatile bool g_played = false;  // set after a reply finishes playing
 
 int b64_val(char c) noexcept {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -113,6 +116,7 @@ void play_output(pb_esp::Esp32MicDriver& mic, pb_esp::Esp32SpeakerDriver& speake
     speaker.stop_playback();             // release I2S_NUM_1
     mic.start_capture(16000, wake.feed_chunksize(), mic_to_afe, &wake);  // re-claim RX
     g_out_len = 0;
+    g_played = true;  // main loop returns to the calm listening pose
     ESP_LOGI(kTag, "playback done; mic + wake resumed");
 }
 
@@ -135,6 +139,7 @@ bool handle_output_line(const char* buf, std::size_t n,
         const cJSON* sr = data ? cJSON_GetObjectItemCaseSensitive(data, "sample_rate_hz") : nullptr;
         g_out_rate = cJSON_IsNumber(sr) ? static_cast<std::uint32_t>(sr->valuedouble) : 16000;
         g_out_len = 0;
+        g_out_frames = 0;
         g_out_active = true;
         ESP_LOGI(kTag, "audio output start (rate %u)", static_cast<unsigned>(g_out_rate));
     } else if (std::strcmp(e, "pre.audio.output_frame") == 0) {
@@ -147,10 +152,13 @@ bool handle_output_line(const char* buf, std::size_t n,
                     d->valuestring, std::strlen(d->valuestring),
                     reinterpret_cast<std::uint8_t*>(g_out_buf + g_out_len), room);
                 g_out_len += got / sizeof(std::int16_t);
+                ++g_out_frames;
             }
         }
     } else if (std::strcmp(e, "pre.audio.output_stop") == 0) {
         g_out_active = false;
+        ESP_LOGI(kTag, "audio output stop: %d frames recv, %u samples buffered",
+                 g_out_frames, static_cast<unsigned>(g_out_len));
         play_output(mic, speaker, wake);
     } else {
         handled = false;  // not an audio output event
@@ -343,6 +351,16 @@ void app_main() {
     constexpr std::uint32_t kIdleReturn = 800;   // ~8 s of quiet → relax to neutral
     constexpr std::uint32_t kAmbientGap = 1700;  // ~17 s between subtle glances
 
+    // "Thinking" animation: from when a question is fully sent until PRE's
+    // reply plays, hold the thinking face + a gentle pondering head sway so
+    // the user can see it's working (PRE can take ~20 s).
+    bool thinking = false;
+    std::uint32_t think_tick = 0;
+    std::uint32_t next_think_move = 0;
+    int think_dir = 1;
+    constexpr std::uint32_t kThinkMoveGap = 130;   // ~1.3 s between ponder sways
+    constexpr std::uint32_t kThinkTimeout = 6000;  // ~60 s safety cap
+
     while (true) {
         // Drain every framed line this tick (audio output arrives as a burst
         // of frames). Audio output events are handled inline (buffer/play);
@@ -392,19 +410,62 @@ void app_main() {
             // Arm a mic-capture session so the question gets streamed to PRE.
             // Only worth it if a central is actually connected to receive it.
             if (ble.is_connected()) audio_in.request_capture();
+            thinking = false;  // a fresh question supersedes any pending wait
             idle_ticks = 0;
             idled = false;
         }
 
-        // After a quiet spell, relax everything to the calm idle pose.
-        if (!idled && idle_ticks >= kIdleReturn) {
+        // Finished speaking the reply → relax to the calm listening pose.
+        if (g_played) {
+            g_played = false;
+            thinking = false;
+            loop.reset_to_idle();
+            idle_ticks = 0;
+            idled = true;
+            next_ambient = idle_ticks + kAmbientGap;
+        }
+        // Question fully sent → enter the "thinking" pose until the reply plays.
+        if (audio_in.reply_pending()) {
+            audio_in.clear_reply_pending();
+            thinking = true;
+            think_tick = ticks;
+            next_think_move = ticks;  // ponder right away
+            display.show_expression(loop.character(), pb::Expression::Thinking);
+            led.set_color(pb::LedColor::Cyan);
+            ESP_LOGI(kTag, "thinking — awaiting PRE reply");
+        }
+        // Gentle "pondering" sway while thinking; bail after the safety cap.
+        // Hold the sway while output frames are streaming in (g_out_active) so
+        // servo traffic can't compete with draining the RX burst.
+        if (thinking) {
+            if (!g_out_active && ticks >= next_think_move) {
+                pb::MotionCommand m;
+                m.head_x_deg = static_cast<float>(think_dir) * 8.0f;
+                m.head_y_deg = 58.0f;  // glance slightly up, as if pondering
+                m.duration_ms = 850;
+                servo.move(m);
+                think_dir = -think_dir;
+                next_think_move = ticks + kThinkMoveGap;
+            }
+            if (ticks - think_tick > kThinkTimeout) {
+                thinking = false;
+                loop.reset_to_idle();
+                idle_ticks = 0;
+                idled = true;
+                ESP_LOGW(kTag, "thinking timed out — back to idle");
+            }
+        }
+
+        // After a quiet spell, relax everything to the calm idle pose. Held off
+        // while capturing/draining a question or showing the thinking pose.
+        if (!thinking && !audio_in.is_busy() && !idled && idle_ticks >= kIdleReturn) {
             loop.reset_to_idle();
             idled = true;
             next_ambient = idle_ticks + kAmbientGap;
         }
         // Subtle ambient "looking around": mostly still, a small head glance
         // every ~17 s, alternating sides — the calm alive-but-idle loop.
-        if (idled && idle_ticks >= next_ambient) {
+        if (!thinking && !audio_in.is_busy() && idled && idle_ticks >= next_ambient) {
             pb::MotionCommand m;
             m.head_x_deg = static_cast<float>(ambient_dir) * 12.0f;
             m.head_y_deg = 45.0f + (ambient_dir > 0 ? 3.0f : -3.0f);

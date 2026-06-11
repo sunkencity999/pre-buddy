@@ -205,6 +205,7 @@ class BleakNusBackend:
         self._tx_queue: Deque[str] = deque()
         self._tx_buffer = bytearray()
         self._wwr_logged = False  # one-shot log of the chosen write mode
+        self._frag_counter = 0    # spans send_rx calls for the hybrid-ack barrier
 
     def _cb_peripheral(self) -> Any:
         """The underlying CoreBluetooth CBPeripheral, used for
@@ -328,30 +329,43 @@ class BleakNusBackend:
             raise TransportError("write_rx while disconnected")
 
         async def _write_async() -> None:
-            # Fragment to (ATT_MTU - 3) and write each piece with response=True.
-            # Each is a single valid ATT op (not a rejected "long write") and is
-            # ACK-paced, so it CANNOT overflow CoreBluetooth's queue. We tried
-            # write-without-response for speed, but bleak fires it and forgets
-            # (its canSendWriteWithoutResponse pacing didn't actually throttle),
-            # so anything past what the OS buffer held was silently dropped and
-            # longer replies lost every frame after output_start. Reliability
-            # wins; 8 kHz output keeps a typical reply to a few seconds and the
-            # device's "thinking" animation covers the wait.
+            # HYBRID-ACK fragmentation. Pure write-with-response is reliable but
+            # ACK-stalls a full connection interval PER fragment (~3 KB/s). Pure
+            # write-without-response is fast but bleak fires it and forgets, so
+            # it overflows CoreBluetooth's queue / the device and silently drops.
+            # So: send WITHOUT response, but every Nth fragment WITH response as
+            # a flow-control barrier. The acked write blocks until the device has
+            # drained the burst before it, bounding the in-flight depth (no
+            # overflow) while paying the ACK cost only 1/N of the time (~Nx
+            # faster). The device's multi-line RX queue absorbs each burst.
+            ACK_EVERY = 8
             mtu = getattr(client, "mtu_size", 23) or 23
             chunk = max(20, mtu - 3)
+            peripheral = self._cb_peripheral()  # for canSendWriteWithoutResponse
             if not self._wwr_logged:
                 self._wwr_logged = True
                 import sys
-                print(f"[ble] output writes: write-with-response (reliable), mtu={mtu}",
+                paced = "canSend-paced" if peripheral is not None else "unpaced"
+                print(f"[ble] output writes: hybrid-ack (1 ack / {ACK_EVERY}, {paced}), mtu={mtu}",
                       file=sys.stderr, flush=True)
             for i in range(0, len(payload), chunk):
+                self._frag_counter += 1
+                acked = (self._frag_counter % ACK_EVERY == 0)
+                # Before an unacked write, wait until CoreBluetooth says it can
+                # take one (its WWR queue is shallow — firing blind drops). Acked
+                # writes block on the ATT response anyway, so they don't need it.
+                if not acked and peripheral is not None:
+                    spins = 0
+                    while not peripheral.canSendWriteWithoutResponse() and spins < 2000:
+                        await asyncio.sleep(0.001)
+                        spins += 1
                 await client.write_gatt_char(
-                    NUS_RX_CHAR_UUID, payload[i:i + chunk], response=True)
+                    NUS_RX_CHAR_UUID, payload[i:i + chunk], response=acked)
 
-        # Per-line deadline: a frame is a few ACK-paced fragments (<100 ms
-        # normally). 4 s is generous; if a write stalls longer the device
-        # isn't going to ACK it, so time out, cancel the coroutine (see _call),
-        # and let the loop drop this one frame and move on rather than wedge.
+        # Per-line deadline. A frame's fragments stream at link rate with only
+        # occasional ACK barriers; 4 s is generous. If a barrier write stalls
+        # longer the device isn't draining, so time out, cancel the coroutine
+        # (see _call), and let the loop drop this one frame rather than wedge.
         self._call(_write_async(), timeout_s=4.0)
 
     def pop_tx_line(self) -> Optional[str]:

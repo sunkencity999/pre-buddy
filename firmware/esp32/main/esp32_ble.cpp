@@ -2,15 +2,18 @@
 // ESP32-S3 IBleTransport — Nordic UART Service peripheral over NimBLE.
 //
 // Advertises the NUS service (UUIDs from pre_buddy/hal/uuids.h) under the
-// device name, accepts newline-framed JSON on the RX characteristic (fed
-// into LineFramer), and pushes lines back to the central via TX notify.
+// device name, accepts newline-framed JSON on the RX characteristic, and
+// pushes lines back to the central via TX notify.
 //
-// The NimBLE host runs on its own task; the RobotLoop polls has_incoming()
-// / pop_incoming() from the main task. The shared LineFramer is guarded by
-// a spinlock since feed() (host task) and pop() (main task) race.
+// The NimBLE host runs on its own task; the RX callback reassembles fragmented
+// writes into '\n'-terminated lines and pushes each into a FreeRTOS message
+// buffer (g_rx_msgbuf). The RobotLoop drains it via has_incoming()/
+// pop_incoming() from the main task. The message buffer is the single-writer
+// (host task) / single-reader (main task) boundary, so no extra lock is needed.
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/message_buffer.h"
 #include "freertos/task.h"
 
 #include "nimble/nimble_port.h"
@@ -43,7 +46,21 @@ namespace {
 constexpr const char* TAG = "pre-buddy-ble";
 
 Esp32BleTransport* g_instance = nullptr;
-portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Inbound (central → device) line queue. The RX GATT callback (NimBLE host
+// task) reassembles fragmented writes into '\n'-terminated lines in g_rx_accum
+// and pushes each completed line into g_rx_msgbuf; the main loop drains it via
+// pop_incoming. A queue (not the old single-line framer) is what lets fast
+// write-WITHOUT-response bursts land without dropping lines — the main loop no
+// longer has to pop each line before the next one completes. Single writer
+// (RX task) + single reader (main task) = the message buffer needs no extra
+// lock. Sized to hold a burst of audio-output frame lines (~1.8 KB each).
+constexpr std::size_t kRxLineMax = 2048;
+constexpr std::size_t kRxQueueBytes = 32768;
+MessageBufferHandle_t g_rx_msgbuf = nullptr;
+char g_rx_accum[kRxLineMax];
+std::size_t g_rx_accum_len = 0;
+bool g_rx_overflow = false;  // current line exceeded kRxLineMax → drop it
 
 uint16_t g_tx_val_handle = 0;
 volatile uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -72,26 +89,44 @@ const ble_uuid128_t kTxUuid = BLE_UUID128_INIT(  // peripheral -> central (notif
 
 void start_advertising();
 
-// RX: central wrote bytes. Feed every mbuf segment into the framer.
+// Push one completed line (no trailing '\n') into the RX queue. Drops it if
+// the queue is momentarily full — only possible if the main loop stalls far
+// longer than a burst, which it doesn't during reception.
+void rx_push_line(const char* data, std::size_t len) {
+    if (g_rx_msgbuf == nullptr || len == 0) return;
+    if (xMessageBufferSend(g_rx_msgbuf, data, len, 0) != len) {
+        ESP_LOGW(TAG, "RX queue full — dropped a %u-byte line", (unsigned)len);
+    }
+}
+
+// RX: central wrote bytes. Reassemble fragmented writes into '\n'-terminated
+// lines and queue each completed line. Runs on the NimBLE host task; g_rx_accum
+// is touched only here, so no lock is needed (the queue is the SPSC boundary).
 int gatt_rx_cb(uint16_t conn_handle, uint16_t attr_handle,
                struct ble_gatt_access_ctxt* ctxt, void* arg) {
     (void)conn_handle;
     (void)attr_handle;
     (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
-    if (g_instance == nullptr) return 0;
     // The central terminates every logical line with '\n' and fragments it
     // across as many MTU-sized writes as needed (audio output frames span
-    // several). Feed the raw bytes straight into the newline framer — it
-    // completes a line when the real '\n' arrives, no matter how the writes
-    // fall. (Previously we fabricated a '\n' per write, which only held while
-    // one write == one line.)
-    taskENTER_CRITICAL(&g_mux);
+    // several). Scan the bytes for newlines, completing a line no matter how
+    // the writes fall.
     for (struct os_mbuf* om = ctxt->om; om != nullptr; om = SLIST_NEXT(om, om_next)) {
-        g_instance->framer().feed(reinterpret_cast<const uint8_t*>(om->om_data),
-                                  om->om_len);
+        const auto* p = reinterpret_cast<const char*>(om->om_data);
+        for (uint16_t i = 0; i < om->om_len; ++i) {
+            const char c = p[i];
+            if (c == '\n') {
+                if (!g_rx_overflow) rx_push_line(g_rx_accum, g_rx_accum_len);
+                g_rx_accum_len = 0;
+                g_rx_overflow = false;
+            } else if (g_rx_accum_len < kRxLineMax) {
+                g_rx_accum[g_rx_accum_len++] = c;
+            } else {
+                g_rx_overflow = true;  // line too long; discard until next '\n'
+            }
+        }
     }
-    taskEXIT_CRITICAL(&g_mux);
     return 0;
 }
 
@@ -275,6 +310,11 @@ void Esp32BleTransport::start(std::string_view device_name) noexcept {
         g_device_name[n] = '\0';
     }
 
+    g_rx_msgbuf = xMessageBufferCreate(kRxQueueBytes);
+    if (g_rx_msgbuf == nullptr) ESP_LOGE(TAG, "RX queue alloc failed");
+    g_rx_accum_len = 0;
+    g_rx_overflow = false;
+
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init failed: %d", err);
@@ -312,23 +352,12 @@ void Esp32BleTransport::stop() noexcept {
 bool Esp32BleTransport::is_connected() const noexcept { return g_connected; }
 
 bool Esp32BleTransport::has_incoming() const noexcept {
-    taskENTER_CRITICAL(&g_mux);
-    const bool ready = framer_.has_line();
-    taskEXIT_CRITICAL(&g_mux);
-    return ready;
+    return g_rx_msgbuf != nullptr && !xMessageBufferIsEmpty(g_rx_msgbuf);
 }
 
 std::size_t Esp32BleTransport::pop_incoming(char* out_buf, std::size_t max_len) noexcept {
-    taskENTER_CRITICAL(&g_mux);
-    if (!framer_.has_line()) {
-        taskEXIT_CRITICAL(&g_mux);
-        return 0;
-    }
-    const auto line = framer_.pop_line();
-    const auto n = (line.size() < max_len) ? line.size() : max_len;
-    std::memcpy(out_buf, line.data(), n);
-    taskEXIT_CRITICAL(&g_mux);
-    return n;
+    if (g_rx_msgbuf == nullptr) return 0;
+    return xMessageBufferReceive(g_rx_msgbuf, out_buf, max_len, 0);
 }
 
 bool Esp32BleTransport::send_line(std::string_view line) noexcept {

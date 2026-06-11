@@ -141,7 +141,12 @@ class PreWsClient:
 
         t0 = time.monotonic()
         parts: list[str] = []
-        with connect(self.ws_url, max_size=None, open_timeout=10) as ws:
+        # ping_interval=None disables client keepalive pings. PRE can block for
+        # 30-60s+ on a heavy tooled/research query without sending anything; the
+        # default 20s ping timeout would otherwise close the connection mid-reply
+        # ("keepalive ping timeout"). Our own timeout_s deadline bounds the wait.
+        with connect(self.ws_url, max_size=None, open_timeout=10,
+                     ping_interval=None) as ws:
             ws.send(json.dumps({"type": "message", "content": user_text}))
             deadline = time.monotonic() + self.timeout_s
             while time.monotonic() < deadline:

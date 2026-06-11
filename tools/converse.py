@@ -34,6 +34,11 @@ def main() -> int:
                     help="sample rate for the spoken reply (default 8000 — half "
                          "the BLE bytes; fine for the small robot speaker)")
     ap.add_argument("--connect-timeout", type=float, default=20.0)
+    ap.add_argument("--out-frame-ms", type=int, default=80,
+                    help="TTS output frame size (default 80 ms). Bigger frames = "
+                         "far fewer BLE writes = much faster output transfer; "
+                         "capped so a frame line stays under the device's 2048-byte "
+                         "RX framer (80 ms @ 8 kHz ≈ 1.8 KB).")
     ap.add_argument("--play-back", action="store_true",
                     help="write the spoken reply back to the device (needs the "
                          "Phase 4 speaker path; off by default — input test only)")
@@ -49,7 +54,7 @@ def main() -> int:
     bridge = AudioBridge(
         pump=EventPump(),
         stt=WhisperStt(),
-        tts=SayTts(),
+        tts=SayTts(frame_ms=args.out_frame_ms),
         pre_client=PreWsClient(ws_url=args.pre_url),
         sample_rate_hz=args.sample_rate,
         output_codec="pcm16",

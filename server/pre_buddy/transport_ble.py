@@ -80,6 +80,10 @@ class BleNusTransport:
         self.sent_lines: list[str] = []
         # Backwards compatibility with MockBleSession's eager inbound queue.
         self._injected: Deque[str] = deque()
+        # The unified daemon writes from two threads (voice output + ambient/
+        # control forwarding). Serialize whole-line sends so one line's MTU
+        # fragments go out contiguously rather than interleaving on the wire.
+        self._send_lock = threading.Lock()
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -100,15 +104,18 @@ class BleNusTransport:
     # ── data path ──────────────────────────────────────────────────────
 
     def send_line(self, line: str) -> None:
-        if not self._backend.is_connected():
-            raise TransportError("cannot send while disconnected")
         if "\n" in line:
             raise ValueError("send_line: payload must not contain newlines")
-        # Terminate the line with '\n' so the peripheral's framer can
-        # reassemble it from however many MTU-sized GATT writes the backend
-        # splits it into (audio output frames exceed one write).
-        self._backend.write_rx((line + "\n").encode("utf-8"))
-        self.sent_lines.append(line)
+        # Hold the lock across the whole write so a line's MTU fragments aren't
+        # interleaved with another thread's line on the wire.
+        with self._send_lock:
+            if not self._backend.is_connected():
+                raise TransportError("cannot send while disconnected")
+            # Terminate the line with '\n' so the peripheral's framer can
+            # reassemble it from however many MTU-sized GATT writes the backend
+            # splits it into (audio output frames exceed one write).
+            self._backend.write_rx((line + "\n").encode("utf-8"))
+            self.sent_lines.append(line)
 
     def recv_line(self) -> Optional[str]:
         if not self._backend.is_connected():

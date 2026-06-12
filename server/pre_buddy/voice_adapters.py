@@ -130,9 +130,13 @@ class PreWsClient:
     "content":...} events until {"type":"done"}.
     """
 
-    def __init__(self, ws_url: str = "ws://localhost:7749", timeout_s: float = 180.0) -> None:
+    def __init__(self, ws_url: str = "ws://localhost:7749", timeout_s: float = 180.0,
+                 session_id: Optional[str] = "buddy:voice") -> None:
         self.ws_url = ws_url
         self.timeout_s = timeout_s
+        # Spoken Q&A goes to its own PRE session so it doesn't clutter the
+        # user's chat history. None = use the connection default (web:general).
+        self.session_id = session_id
 
     def ask(self, user_text: str) -> str:
         if not user_text.strip():
@@ -147,6 +151,10 @@ class PreWsClient:
         # ("keepalive ping timeout"). Our own timeout_s deadline bounds the wait.
         with connect(self.ws_url, max_size=None, open_timeout=10,
                      ping_interval=None) as ws:
+            # Route the turn to the dedicated voice session (PRE replies with a
+            # session_history frame, which the loop below ignores — not a token).
+            if self.session_id:
+                ws.send(json.dumps({"type": "switch_session", "sessionId": self.session_id}))
             ws.send(json.dumps({"type": "message", "content": user_text}))
             deadline = time.monotonic() + self.timeout_s
             while time.monotonic() < deadline:
